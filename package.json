@@ -1,0 +1,11 @@
+{
+  "name": "resources",
+  "version": "0.0.1",
+  "description": "Core set of resources; most commonly used functions. For lack of better name.",
+  "repository": "git@github.com:borg-scripts/resources.git",
+  "author": "Mike Smullin <mike@smullindesign.com>",
+  "license": "GPLv2",
+  "dependencies": {
+    "async2": "~0.1.7"
+  }
+}

@@ -11,10 +11,10 @@ global.install = (pkgs, [o]..., cb) ->
   o ||= {}
   flow = new async
   pkgs = pkgs.split(/[\r\n\s]+/)
-  #unless did_apt_get_update_this_session
-  #  flow.serial ->
-  #    execute "sudo apt-get update", @
-  #    did_apt_get_update_this_session = true
+  unless did_apt_get_update_this_session
+    flow.serial ->
+      execute "sudo apt-get update", @
+      did_apt_get_update_this_session = true
   flow.serial ->
     execute "sudo apt-get install -y #{pkgs.join ' '}", @
   return flow.go cb unless o.not_if
