@@ -1,8 +1,14 @@
 async = require 'async2'
 delay = (s, f) -> setTimeout f, s
 
-global.execute = (line, cb) ->
-  ssh.cmd line, {}, cb
+global.execute = (line, [o]..., cb) ->
+  o ||= {}
+  go = ->
+    ssh.cmd line, {}, cb
+  return go() unless o.not_if
+  execute o.not_if, (code) ->
+    return cb() if code is 0
+    go()
 
 did_apt_get_update_this_session = false
 global.install = (pkgs, [o]..., cb) ->
