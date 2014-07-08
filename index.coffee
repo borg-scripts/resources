@@ -2,7 +2,6 @@ _ = require 'lodash'
 path = require 'path'
 async = require 'async2'
 crypto = require 'crypto'
-require 'sugar'
 delay = (s, f) -> setTimeout f, s
 did_apt_get_update_this_session = false
 
@@ -11,8 +10,9 @@ module.exports = -> _.assign @,
 
   # use with resources that accept multiple values in the name argument
   getNames: (names) =>
-    @die "One or more names are required." if names.trim() is ''
-    return if Array.isArray x then x else x.compact().split ' '
+    names = if Array.isArray names then names else names.compact().split ' '
+    @die "One or more names are required." if names.length is 0
+    return names
 
   # use with @execute() to validate the exit status code
   mustExit: (expected, cb) => (code) =>
@@ -35,19 +35,26 @@ module.exports = -> _.assign @,
   # use in situations where failures are okay (compare @die()),
   # and to notify the user why you are skipping a command.
   skip: (reason, cb) =>
-    @log reason
+    @log "Skipping command(s) because #{reason}"
     cb()
+
+  # used to asynchronously iterate an array in series
+  each: (a, done_cb, each_cb, i=0) =>
+    if a[i]?
+      each_cb a[i], => @each a, done_cb, each_cb, i+1
+    else
+      done_cb()
 
   # actual resources
 
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
   execute: (cmd, [o]..., cb) =>
-    @ssh.cmd "#{o?.sudo and 'sudo '}#{cmd}", cb
+    @ssh.cmd "#{if o?.sudo then 'sudo ' else ''}#{cmd}", cb
 
   install: (pkgs, [o]..., cb) =>
-    @test "dpkg -s #{@getNames(packages).join ' '} | grep 'not installed'", code: 0, (necessary) =>
-      return @skip "Package(s) already installed.", cb unless necessary
+    @test "dpkg -s #{@getNames(pkgs).join ' '} | grep 'is not installed and'", code: 0, (necessary) =>
+      return @skip "package(s) already installed.", cb unless necessary
       ((next) =>
         # TODO: save .dotfile on remote host remembering last update date between sessions,
         #       and then check it and only run when its not there or has been >24hrs
@@ -57,46 +64,49 @@ module.exports = -> _.assign @,
           next()
       )(=>
         @execute "apt-get install -y "+
-          "#{@getNames(packages).join ' '}", sudo: true, @mustExit 0, cb
+          "#{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
       )
 
   uninstall: (pkgs, [o]..., cb) =>
-    @test "dpkg -s #{@getNames(packages).join ' '} | grep installed", code: 0, (necessary) =>
-      return @skip "Package(s) already uninstalled.", cb unless necessary
+    @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
+      return @skip "package(s) already uninstalled.", cb unless necessary
       @execute "apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
         " #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
 
   service: (pkgs, [o]..., cb) =>
-    for pkg in @getNames pkgs
+    @each @getNames(pkgs), cb, (pkg, next) =>
       @execute "service "+
         "#{pkg}"+
-        " #{o?.action or 'start'}", sudo: true, @mustExit 0, cb
+        " #{o?.action or 'start'}", sudo: true, @mustExit 0, next
 
   chown: (paths, [o]..., cb) =>
-    @die "User and/or group are required." unless o?.user or o?.group
-    for path in @getNames paths
+    @die "user and/or group are required." unless o?.user or o?.group
+    @each @getNames(paths), cb, (path, next) =>
       @execute "chown "+
-        "#{o?.recursive and '-R '}"+
+        "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.user}"+
         ".#{o?.group}"+
-        " #{path}", o, @mustExit 0, cb
+        " #{path}", o, @mustExit 0, next
 
   chmod: (paths, o, cb) =>
-    @die "Mode is required." unless o?.mode
-    for path in @getNames paths
+    @die "mode is required." unless o?.mode
+    @each @getNames(paths), cb, (path, next) =>
       @execute "chmod "+
         "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.mode}"+
-        " #{path}", o, @mustExit 0, cb
+        " #{path}", o, @mustExit 0, next
 
   directory: (paths, [o]..., cb) =>
-    for path in @getNames paths
-      @execute "mkdir"+
-        "#{o?.recursive and ' -p'}"+
-        "#{o?.mode and " -m#{o.mode}"}"+
-        " #{path}", sudo: true, @mustExit 0, =>
-          @chown path, o, cb
+    @each @getNames(paths), cb, (path, next) =>
+      setModeAndOwner = =>
+        @chown path, o, =>
+          @chmod path, o, next
+      @test "test -d #{path}", code: 1, (necessary) =>
+        return @skip "directory already exists.", setModeAndOwner unless necessary
+        @execute "mkdir"+
+          "#{if o?.recursive then ' -p' else ''}"+
+          " #{path}", sudo: true, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
   wget_download: (localfile, [o]..., cb) ->
