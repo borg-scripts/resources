@@ -30,7 +30,7 @@ module.exports = -> _.assign @,
       if expected.code?
         cb code is expected.code
       else if expected.rx?
-        cb rx.exec out
+        cb expected.rx.exec out
 
   # use in situations where failures are okay (compare @die()),
   # and to notify the user why you are skipping a command.
@@ -45,15 +45,23 @@ module.exports = -> _.assign @,
     else
       done_cb()
 
+  not_if: (cmd, do_cb, done_cb) =>
+    @test cmd, code: 0, (res) =>
+      unless res
+        do_cb done_cb
+      else
+        done_cb()
+
+
   # actual resources
 
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
   execute: (cmd, [o]..., cb) =>
-    @ssh.cmd "#{if o?.sudo then 'sudo ' else ''}#{cmd}", cb
+    @ssh.cmd "#{if o?.sudo then 'sudo ' else ''}#{cmd}", o, cb
 
   install: (pkgs, [o]..., cb) =>
-    @test "dpkg -s #{@getNames(pkgs).join ' '} | grep 'is not installed and'", code: 0, (necessary) =>
+    @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
       return @skip "package(s) already installed.", cb unless necessary
       ((next) =>
         # TODO: save .dotfile on remote host remembering last update date between sessions,
@@ -63,16 +71,16 @@ module.exports = -> _.assign @,
           did_apt_get_update_this_session = true
           next()
       )(=>
-        @execute "apt-get install -y "+
+        @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
           "#{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
       )
 
   uninstall: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
       return @skip "package(s) already uninstalled.", cb unless necessary
-      @execute "apt-get "+
+      @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
-        " #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
+        " -y #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
 
   service: (pkgs, [o]..., cb) =>
     @each @getNames(pkgs), cb, (pkg, next) =>
@@ -109,26 +117,23 @@ module.exports = -> _.assign @,
           " #{path}", sudo: true, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
-  wget_download: (localfile, [o]..., cb) ->
-    throw "source is required" unless o?.source
-    go = -> execute "wget #{o.source} -O #{localfile}", ->
-      if o.checksum
-        buf = ''
-        ssh.cmd "sha256sum #{localfile} | cut -d' ' -f1", data: ((data, extended) ->
-          return if extended is 'stderr'
-          buf += data.toString()
-        ), ->
-          buf = buf.trim()
-          unless buf.trim() is o.checksum
-            throw "download failed; checksum mismatch. expected #{JSON.stringify o.checksum} but got #{JSON.stringify buf} instead."
-          cb()
-    return go() unless o.not_if
-    execute o.not_if, (code) ->
-      return cb() if code is 0
-      go()
+  wget_download: (uris, [o]..., cb) =>
+    @die "to is required." unless o?.to
+    @each @getNames(uris), cb, (uri, nextFile) =>
+      ((download)=>
+        unless o?.replace # TODO: eventually use checksum to assume replacement necessary
+          @test "test -f #{uri}", code: 1, (necessary) =>
+            download() if necessary
+      )(=>
+        @execute "wget --progress=dot #{uri}#{if o?.to then " -O #{o.to}" else ""}", o, =>
+          return nextFile() unless o?.checksum
+          @test "sha256sum #{o.to}", rx: /[a-f0-9]{64}/, (hash) =>
+            @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
+            nextFile()
+      )
 
   # upload a file from localhost to the remote host with sftp
-  sftp_upload: (file, [o]..., cb) ->
+  sftp_upload: (file, [o]..., cb) =>
     # TODO: not if file with same sha256sum already exists in o.path
     throw "path is required" unless o?.path
     go = ->
@@ -148,18 +153,16 @@ module.exports = -> _.assign @,
       go()
 
   reboot: ([o]..., cb) =>
+    o ||= {}; o.wait ||= 60*1000
     @log '''
-           (╯°□°）╯ ︵ ┻━┻
     ###############################
-    ###############################
-    #####  REBOOTING SERVER #######
-    ###############################
+    #####  REBOOTING SERVER #######       (╯°o°)╯ ︵ ┻━┻
     ###############################
     '''
     @execute "reboot", sudo: true, =>
-      @log "waiting for server to reboot...", =>
-        delay o?.wait or 60*1000, =>
-          @log "re-establishing ssh connection", =>
+      @log "waiting #{o.wait}ms for server to reboot...", =>
+        delay o.wait, =>
+          @log "attempting to re-establish ssh connection", =>
             @ssh.connect =>
               cb()
 
