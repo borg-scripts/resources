@@ -1,126 +1,191 @@
+_ = require 'lodash'
+path = require 'path'
 async = require 'async2'
+crypto = require 'crypto'
+require 'sugar'
 delay = (s, f) -> setTimeout f, s
-
-global.execute = (line, [o]..., cb) ->
-  o ||= {}
-  go = ->
-    ssh.cmd line, {}, cb
-  return go() unless o.not_if
-  execute o.not_if, (code) ->
-    return cb() if code is 0
-    go()
-
 did_apt_get_update_this_session = false
-global.install = (pkgs, [o]..., cb) ->
-  # TODO: unless dpkg --list | grep build-essential
-  # TODO: save some metadata on the remote host recording last update date and dont run until its been 24hrs?
-  o ||= {}
-  flow = new async
-  pkgs = pkgs.split(/[\r\n\s]+/)
-  unless did_apt_get_update_this_session
-    flow.serial ->
-      execute "sudo apt-get update", @
-      did_apt_get_update_this_session = true
-  flow.serial ->
-    execute "sudo apt-get install -y #{pkgs.join ' '}", @
-  return flow.go cb unless o.not_if
-  execute o.not_if, (code) ->
-    return cb() if code is 0
-    flow.go cb
 
-uninstall = ->
-service = ->
+module.exports = -> _.assign @,
+  # validation
 
-# private helper
-chown = (o, cb) ->
-  return cb() unless o?.user or o.group
-  execute "sudo chown "+
-    "#{if o.recursive then '-R ' else ''}"+
-    "#{if o.user then "#{o.user}" else ''}"+
-    "#{if o.group then ".#{o.group}" else ''}"+
-    " #{o.path}", cb
+  # use with resources that accept multiple values in the name argument
+  getNames: (names) =>
+    @die "One or more names are required." if names.trim() is ''
+    return if Array.isArray x then x else x.compact().split ' '
 
-chmod = (o, cb) ->
-  return cb() unless o?.mode
-  execute "sudo chmod "+
-    "#{if o.recursive then '-R ' else ''}"+
-    "#{o.mode} #{o.path}", cb
+  # use with @execute() to validate the exit status code
+  mustExit: (expected, cb) => (code) =>
+    return cb code if code is expected
+    @die "Expected exit code #{expected} but got #{code}."
 
-global.directory = (path, [o]..., cb) ->
-  o ||=  {}
-  execute "sudo mkdir"+
-    "#{if o.recursive is false then '' else ' -p'}"+
-    "#{if o.mode then " -m#{o.mode}" else ''}"+
-    " #{path}", ->
-      o.path = path
-      chown o, cb
+  # use in situations where a simple test could avert two or more commands,
+  # long-running commands, or potentially destructive commands.
+  test: (cmd, [o]..., expected, cb) =>
+    out = ''
+    o =
+      sudo: o?.sudo or false
+      data: (data, steam) => out += data
+    @execute cmd, o, (code) =>
+      if expected.code?
+        cb code is expected.code
+      else if expected.rx?
+        cb rx.exec out
 
-global.remote_file = (localfile, [o]..., cb) ->
-  throw "source is required" unless o?.source
-  go = -> execute "wget #{o.source} -O #{localfile}", ->
-    if o.checksum
-      buf = ''
-      ssh.cmd "sha256sum #{localfile} | cut -d' ' -f1", data: ((data, extended) ->
-        return if extended is 'stderr'
-        buf += data.toString()
-      ), ->
-        buf = buf.trim()
-        unless buf.trim() is o.checksum
-          throw "download failed; checksum mismatch. expected #{JSON.stringify o.checksum} but got #{JSON.stringify buf} instead."
-        cb()
-  return go() unless o.not_if
-  execute o.not_if, (code) ->
-    return cb() if code is 0
-    go()
+  # use in situations where failures are okay (compare @die()),
+  # and to notify the user why you are skipping a command.
+  skip: (reason, cb) =>
+    @log reason
+    cb()
 
-global.dpkg_package = (pkg, [o]..., cb) ->
-  throw "source is required" unless o?.source
-  go = -> execute "sudo dpkg -i #{o.source}", cb
-  return go() unless o.not_if
-  execute o.not_if, (code) ->
-    return cb() if code is 0
-    go()
+  # actual resources
 
-global.put_file = (file, [o]..., cb) ->
-  # TODO: not if file with same sha256sum already exists in o.path
-  throw "path is required" unless o?.path
-  go = ->
-    path = require 'path'
-    src = path.join(process.cwd(), 'scripts', 'zing', 'files', file)
-    dst = o.path
-    fs = require 'fs'
-    Logger.out type: 'info', "beginning SFTP #{fs.statSync(src).size} byte file transfer from #{JSON.stringify src} to #{JSON.stringify dst}..."
-    ssh.put path.join(process.cwd(), 'scripts', 'zing', 'files', file), o.path, (err) ->
-      throw "error during file transfer: #{err}" if err
-      Logger.out type: 'info', "file transferred successfully."
-      chown o, ->
-        chmod o, cb
-  return go() unless o.only_if
-  execute o.only_if, (code) ->
-    return cb() if code isnt 0
-    go()
+  # use when you are sure the cmd does not need to be os agnostic,
+  # or when you are sure you will only ever operate on one os
+  execute: (cmd, [o]..., cb) =>
+    @ssh.cmd "#{o?.sudo and 'sudo '}#{cmd}", cb
 
-global.log = (msg, [o]..., cb) ->
-  Logger.out type: 'info', msg
-  cb()
+  install: (pkgs, [o]..., cb) =>
+    @test "dpkg -s #{@getNames(packages).join ' '} | grep 'not installed'", code: 0, (necessary) =>
+      return @skip "Package(s) already installed.", cb unless necessary
+      ((next) =>
+        # TODO: save .dotfile on remote host remembering last update date between sessions,
+        #       and then check it and only run when its not there or has been >24hrs
+        return next() if did_apt_get_update_this_session
+        @execute 'apt-get update', sudo: true, @mustExit 0, ->
+          did_apt_get_update_this_session = true
+          next()
+      )(=>
+        @execute "apt-get install -y "+
+          "#{@getNames(packages).join ' '}", sudo: true, @mustExit 0, cb
+      )
 
-global.reboot = ([o]..., cb) ->
-  go = ->
-    log '''
+  uninstall: (pkgs, [o]..., cb) =>
+    @test "dpkg -s #{@getNames(packages).join ' '} | grep installed", code: 0, (necessary) =>
+      return @skip "Package(s) already uninstalled.", cb unless necessary
+      @execute "apt-get "+
+        "#{if o?.purge then 'purge' else 'uninstall'}"+
+        " #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
+
+  service: (pkgs, [o]..., cb) =>
+    for pkg in @getNames pkgs
+      @execute "service "+
+        "#{pkg}"+
+        " #{o?.action or 'start'}", sudo: true, @mustExit 0, cb
+
+  chown: (paths, [o]..., cb) =>
+    @die "User and/or group are required." unless o?.user or o?.group
+    for path in @getNames paths
+      @execute "chown "+
+        "#{o?.recursive and '-R '}"+
+        "#{o?.user}"+
+        ".#{o?.group}"+
+        " #{path}", o, @mustExit 0, cb
+
+  chmod: (paths, o, cb) =>
+    @die "Mode is required." unless o?.mode
+    for path in @getNames paths
+      @execute "chmod "+
+        "#{if o?.recursive then '-R ' else ''}"+
+        "#{o?.mode}"+
+        " #{path}", o, @mustExit 0, cb
+
+  directory: (paths, [o]..., cb) =>
+    for path in @getNames paths
+      @execute "mkdir"+
+        "#{o?.recursive and ' -p'}"+
+        "#{o?.mode and " -m#{o.mode}"}"+
+        " #{path}", sudo: true, @mustExit 0, =>
+          @chown path, o, cb
+
+  # download a file from the internet to the remote host with wget
+  wget_download: (localfile, [o]..., cb) ->
+    throw "source is required" unless o?.source
+    go = -> execute "wget #{o.source} -O #{localfile}", ->
+      if o.checksum
+        buf = ''
+        ssh.cmd "sha256sum #{localfile} | cut -d' ' -f1", data: ((data, extended) ->
+          return if extended is 'stderr'
+          buf += data.toString()
+        ), ->
+          buf = buf.trim()
+          unless buf.trim() is o.checksum
+            throw "download failed; checksum mismatch. expected #{JSON.stringify o.checksum} but got #{JSON.stringify buf} instead."
+          cb()
+    return go() unless o.not_if
+    execute o.not_if, (code) ->
+      return cb() if code is 0
+      go()
+
+  # upload a file from localhost to the remote host with sftp
+  sftp_upload: (file, [o]..., cb) ->
+    # TODO: not if file with same sha256sum already exists in o.path
+    throw "path is required" unless o?.path
+    go = ->
+      path = require 'path'
+      src = path.join(process.cwd(), 'scripts', 'zing', 'files', file)
+      dst = o.path
+      fs = require 'fs'
+      Logger.out type: 'info', "beginning SFTP #{fs.statSync(src).size} byte file transfer from #{JSON.stringify src} to #{JSON.stringify dst}..."
+      ssh.put path.join(process.cwd(), 'scripts', 'zing', 'files', file), o.path, (err) ->
+        throw "error during file transfer: #{err}" if err
+        Logger.out type: 'info', "file transferred successfully."
+        chown o, ->
+          chmod o, cb
+    return go() unless o.only_if
+    execute o.only_if, (code) ->
+      return cb() if code isnt 0
+      go()
+
+  reboot: ([o]..., cb) =>
+    @log '''
+           (╯°□°）╯ ︵ ┻━┻
     ###############################
     ###############################
     #####  REBOOTING SERVER #######
     ###############################
     ###############################
-    ''', ->
-      execute "sudo reboot", ->
-        log "waiting for server to reboot...", ->
-          delay o.wait or 60*1000, ->
-            log "re-establishing ssh connection", ->
-              ssh.connect ->
-                cb()
-  # TODO: make a generic private method that performs not_if and only_if checks for every resource
-  return go() unless o.not_if
-  execute o.not_if, (code) ->
-    return cb() if code is 0
-    go()
+    '''
+    @execute "reboot", sudo: true, =>
+      @log "waiting for server to reboot...", =>
+        delay o?.wait or 60*1000, =>
+          @log "re-establishing ssh connection", =>
+            @ssh.connect =>
+              cb()
+
+  deploy_revision: (name, [o]..., cb) =>
+    # TODO: support git
+    # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
+    # TODO: support keep_releases
+    releases_dir = path.join o.deploy_to, 'releases'
+    @ssh.cmd "sudo mkdir -p #{releases_dir}", {}, =>
+      out = ''
+      @ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
+        out += data.toString() if type isnt 'stderr'
+      ), (code, signal) =>
+        @die 'svn info failed' unless code is 0
+        @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
+        release_dir = path.join releases_dir, current_revision
+        @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
+          @ssh.cmd "sudo chown -R #{o.user}.#{o.group} #{release_dir}", {}, =>
+            @ssh.cmd "sudo -u#{o.user} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
+              current_dir = path.join o.deploy_to, 'current'
+              link release_dir, current_dir, cb
+
+  link: (src, target, cb) =>
+    @ssh.cmd "[ -h #{target} ] && sudo rm #{target}; sudo ln -s #{src} #{target}", {}, cb
+
+  #put_file: (src, [o]..., cb) =>
+  #  tmp_file = path.join '/', 'tmp', crypto.createHash('sha1').update(''+ (new Date()) + Math.random()).digest('hex')
+  #  @log "sftp local file #{src} to #{tmp_file}"
+  #  @ssh.put src, tmp_file, (err) =>
+  #    return cb err if err
+  #    @ssh.cmd "sudo chown #{o.user or 'root'}.#{o.user or 'root'} #{tmp_file}", {}, =>
+  #      @ssh.cmd "sudo mv #{tmp_file} #{o.target}", {}, cb
+
+  #put_template: (src, [o]..., cb) =>
+  #  # TODO: find out how to put a string via sftp
+  #  @put_file.apply @, arguments
+
+  #cron: (name, [o]..., cb) ->
+  #  cb()
