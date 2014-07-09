@@ -1,4 +1,5 @@
 _ = require 'lodash'
+fs = require 'fs'
 path = require 'path'
 async = require 'async2'
 crypto = require 'crypto'
@@ -124,7 +125,7 @@ module.exports = -> _.assign @,
           " #{path}", sudo: true, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
-  wget_download: (uris, [o]..., cb) =>
+  download: (uris, [o]..., cb) =>
     @die "to is required." unless o?.to
     @each @getNames(uris), cb, (uri, nextFile) =>
       ((download)=>
@@ -140,24 +141,39 @@ module.exports = -> _.assign @,
       )
 
   # upload a file from localhost to the remote host with sftp
-  sftp_upload: (file, [o]..., cb) =>
-    # TODO: not if file with same sha256sum already exists in o.path
-    throw "path is required" unless o?.path
-    go = ->
-      path = require 'path'
-      src = path.join(process.cwd(), 'scripts', 'zing', 'files', file)
-      dst = o.path
-      fs = require 'fs'
-      Logger.out type: 'info', "beginning SFTP #{fs.statSync(src).size} byte file transfer from #{JSON.stringify src} to #{JSON.stringify dst}..."
-      ssh.put path.join(process.cwd(), 'scripts', 'zing', 'files', file), o.path, (err) ->
-        throw "error during file transfer: #{err}" if err
-        Logger.out type: 'info', "file transferred successfully."
-        chown o, ->
-          chmod o, cb
-    return go() unless o.only_if
-    execute o.only_if, (code) ->
-      return cb() if code isnt 0
-      go()
+  upload: (paths, [o]..., cb) =>
+    paths = path.join.apply null, paths if Array.isArray paths
+    @die "to is required." unless o?.to
+    # TODO: not if path with same sha256sum already exists
+    @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
+    @ssh.put paths, o.to, (err) =>
+      @die "error during SFTP file transfer: #{err}" if err
+      @log "SFTP upload complete."
+      @chown o.to, o, =>
+        @chmod o.to, o, =>
+          @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
+
+  template: (paths, [o]..., cb) =>
+    paths = path.join.apply null, paths
+    @die "to is required." unless o?.to
+    # use attrs from @server namespace
+    sandbox = server: @server, networks: @networks
+    if o?.local
+      # locals will only apply if not provided anywhere else
+      sandbox.server = _.merge o.local, @server
+      o.local = null
+    # render template from variables
+    output = (require paths).apply sandbox
+    tmp = crypto.createHash('sha1').update(output).digest('hex')
+    @log "rendered template #{o.to} version #{tmp}"
+    tmpFile = path.join __dirname, tmp
+    o.final_to = o.to; o.to = '/tmp/'+tmp
+    fs.writeFile tmpFile, output, (err) =>
+      @die err if err
+      @upload tmpFile, o, =>
+        fs.unlink tmpFile, (err) =>
+          @die err if err
+          cb()
 
   reboot: ([o]..., cb) =>
     o ||= {}; o.wait ||= 60*1000
@@ -194,18 +210,6 @@ module.exports = -> _.assign @,
 
   link: (src, target, cb) =>
     @ssh.cmd "[ -h #{target} ] && sudo rm #{target}; sudo ln -s #{src} #{target}", {}, cb
-
-  #put_file: (src, [o]..., cb) =>
-  #  tmp_file = path.join '/', 'tmp', crypto.createHash('sha1').update(''+ (new Date()) + Math.random()).digest('hex')
-  #  @log "sftp local file #{src} to #{tmp_file}"
-  #  @ssh.put src, tmp_file, (err) =>
-  #    return cb err if err
-  #    @ssh.cmd "sudo chown #{o.user or 'root'}.#{o.user or 'root'} #{tmp_file}", {}, =>
-  #      @ssh.cmd "sudo mv #{tmp_file} #{o.target}", {}, cb
-
-  #put_template: (src, [o]..., cb) =>
-  #  # TODO: find out how to put a string via sftp
-  #  @put_file.apply @, arguments
 
   #cron: (name, [o]..., cb) ->
   #  cb()
