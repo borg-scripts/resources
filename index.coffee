@@ -52,6 +52,13 @@ module.exports = -> _.assign @,
       else
         done_cb()
 
+  only_if: (cmd, do_cb, done_cb) =>
+    @test cmd, code: 0, (res) =>
+      if res
+        do_cb done_cb
+      else
+        done_cb()
+
 
   # actual resources
 
