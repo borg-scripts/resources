@@ -121,7 +121,7 @@ module.exports = -> _.assign @,
     @die "to is required." unless o?.to
     @each @getNames(uris), cb, (uri, nextFile) =>
       ((download)=>
-        unless o?.replace # TODO: eventually use checksum to assume replacement necessary
+        unless o?.replace # TODO: use checksum to assume replacement necessary
           @test "test -f #{uri}", code: 1, (necessary) =>
             download() if necessary
       )(=>
