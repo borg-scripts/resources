@@ -161,7 +161,7 @@ module.exports = -> _.assign @,
           @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
-    paths = path.join.apply null, [@importCwd, 'templates', 'default'].concat @getNames paths
+    paths = path.join.apply null, @getNames paths
     @die "to is required." unless o?.to
     # use attrs from @server namespace
     variables = server: @server, networks: @networks
@@ -173,11 +173,12 @@ module.exports = -> _.assign @,
     fs.readFile "#{paths}.coffee", encoding: 'utf-8', (err, template) =>
       @die err if err
       # render template from variables
-      output = TemplateRenderer.render template, variables
+      output = TemplateRenderer.render.apply variables, [template]
       # hash rendered template output
       tmp = crypto.createHash('sha1').update(output).digest('hex')
       @log "rendered template #{o.to} version #{tmp}"
-      tmpFile = path.join __dirname, tmp
+      console.log "---- BEGIN TEMPLATE ----\n#{output}\n--- END TEMPLATE ---"
+      tmpFile = path.join '/tmp/', tmp # NOTICE: for windows compatibility this could go into __dirname locally
       o.final_to = o.to; o.to = '/tmp/'+tmp
       # write rendered template to disk
       fs.writeFile tmpFile, output, (err) =>

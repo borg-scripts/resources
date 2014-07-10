@@ -2,7 +2,8 @@ CoffeeScript = require 'coffee-script'
 vm = require 'vm'
 
 module.exports =
-  render: (template, variables) ->
+  # use render.apply(variables) to pass data to template
+  render: (template) ->
     indent = '  '
     level = 0
     indentation = -> o=''; o += indent for i in [0...level]; o
@@ -44,8 +45,7 @@ module.exports =
       plain template.substr x, template.length - x
     #console.log out
     js = CoffeeScript.compile out, bare: true
-    js = "(function(){#{js.substr 7}}).apply(root);"
+    js = js.substr 7
     #console.log js
-    sandbox = root: variables, out: ''
-    vm.runInNewContext js, sandbox, 'a.vm'
-    return sandbox.out
+    eval js
+    return out
