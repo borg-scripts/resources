@@ -3,6 +3,7 @@ fs = require 'fs'
 path = require 'path'
 async = require 'async2'
 crypto = require 'crypto'
+eco = require 'eco'
 delay = (s, f) -> setTimeout f, s
 did_apt_get_update_this_session = false
 
@@ -39,12 +40,18 @@ module.exports = -> _.assign @,
     @log "Skipping command(s) because #{reason}"
     cb()
 
-  # used to asynchronously iterate an array in series
-  each: (a, done_cb, each_cb, i=0) =>
-    if a[i]?
-      each_cb a[i], => @each a, done_cb, each_cb, i+1
-    else
-      done_cb()
+  # used to asynchronously iterate an array or an object in series
+  each: (o, done_cb, each_cb, i=0) =>
+    if Array.isArray o
+      if o[i]?
+        each_cb o[i], => @each o, done_cb, each_cb, i+1
+      else
+        done_cb()
+    else if typeof o is 'object'
+      tuples = []
+      for own k of o
+        tuples.push [k, o[k]]
+      @each tuples, done_cb, each_cb
 
   not_if: (cmd, do_cb, done_cb) =>
     @test cmd, code: 0, (res) =>
@@ -97,11 +104,11 @@ module.exports = -> _.assign @,
         " #{o?.action or 'start'}", sudo: true, @mustExit 0, next
 
   chown: (paths, [o]..., cb) =>
-    @die "user and/or group are required." unless o?.user or o?.group
+    @die "owner and/or group are required." unless o?.owner or o?.group
     @each @getNames(paths), cb, (path, next) =>
       @execute "chown "+
         "#{if o?.recursive then '-R ' else ''}"+
-        "#{o?.user}"+
+        "#{o?.owner}"+
         ".#{o?.group}"+
         " #{path}", o, @mustExit 0, next
 
@@ -154,26 +161,33 @@ module.exports = -> _.assign @,
           @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
-    paths = path.join.apply null, paths
+    paths = path.join.apply null, [@importCwd, 'templates', 'default'].concat @getNames paths
     @die "to is required." unless o?.to
     # use attrs from @server namespace
-    sandbox = server: @server, networks: @networks
-    if o?.local
-      # locals will only apply if not provided anywhere else
-      sandbox.server = _.merge o.local, @server
-      o.local = null
-    # render template from variables
-    output = (require paths).apply sandbox
-    tmp = crypto.createHash('sha1').update(output).digest('hex')
-    @log "rendered template #{o.to} version #{tmp}"
-    tmpFile = path.join __dirname, tmp
-    o.final_to = o.to; o.to = '/tmp/'+tmp
-    fs.writeFile tmpFile, output, (err) =>
+    variables = server: @server, networks: @networks
+    if o?.variables
+      # variables will only apply if not provided anywhere else
+      variables.server = _.merge o.variables, @server
+      o.variables = null
+    # read template
+    fs.readFile "#{paths}.coffee", encoding: 'utf-8', (err, template) =>
       @die err if err
-      @upload tmpFile, o, =>
-        fs.unlink tmpFile, (err) =>
-          @die err if err
-          cb()
+      # render template from variables
+      output = eco.render template, variables
+      # hash rendered template output
+      tmp = crypto.createHash('sha1').update(output).digest('hex')
+      @log "rendered template #{o.to} version #{tmp}"
+      tmpFile = path.join __dirname, tmp
+      o.final_to = o.to; o.to = '/tmp/'+tmp
+      # write rendered template to disk
+      fs.writeFile tmpFile, output, (err) =>
+        @die err if err
+        # upload template
+        @upload tmpFile, o, =>
+          # delete template
+          fs.unlink tmpFile, (err) =>
+            @die err if err
+            cb()
 
   reboot: ([o]..., cb) =>
     o ||= {}; o.wait ||= 60*1000
@@ -203,8 +217,8 @@ module.exports = -> _.assign @,
         @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
         release_dir = path.join releases_dir, current_revision
         @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
-          @ssh.cmd "sudo chown -R #{o.user}.#{o.group} #{release_dir}", {}, =>
-            @ssh.cmd "sudo -u#{o.user} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
+          @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
+            @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
               current_dir = path.join o.deploy_to, 'current'
               link release_dir, current_dir, cb
 
