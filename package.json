@@ -6,7 +6,6 @@
   "author": "Mike Smullin <mike@smullindesign.com>",
   "license": "GPLv2",
   "dependencies": {
-    "async2": "~0.1.7",
-    "eco": "^1.1.0-rc-3"
+    "async2": "~0.1.7"
   }
 }

@@ -3,7 +3,7 @@ fs = require 'fs'
 path = require 'path'
 async = require 'async2'
 crypto = require 'crypto'
-eco = require 'eco'
+TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
 did_apt_get_update_this_session = false
 
@@ -167,13 +167,13 @@ module.exports = -> _.assign @,
     variables = server: @server, networks: @networks
     if o?.variables
       # variables will only apply if not provided anywhere else
-      variables.server = _.merge o.variables, @server
+      variables = _.merge o.variables, variables
       o.variables = null
     # read template
     fs.readFile "#{paths}.coffee", encoding: 'utf-8', (err, template) =>
       @die err if err
       # render template from variables
-      output = eco.render template, variables
+      output = TemplateRenderer.render template, variables
       # hash rendered template output
       tmp = crypto.createHash('sha1').update(output).digest('hex')
       @log "rendered template #{o.to} version #{tmp}"
