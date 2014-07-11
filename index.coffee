@@ -123,6 +123,7 @@ module.exports = -> _.assign @,
   directory: (paths, [o]..., cb) =>
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
+        delete o.recursive
         @chown path, o, =>
           @chmod path, o, next
       @test "test -d #{path}", code: 1, (necessary) =>
