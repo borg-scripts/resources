@@ -141,7 +141,7 @@ module.exports = -> _.assign @,
           @test "test -f #{uri}", code: 1, (necessary) =>
             download() if necessary
       )(=>
-        @execute "wget --progress=dot #{uri}#{if o?.to then " -O #{o.to}" else ""}", o, =>
+        @execute "wget -nv #{uri}#{if o?.to then " -O #{o.to}" else ""}", o, =>
           return nextFile() unless o?.checksum
           @test "sha256sum #{o.to}", rx: /[a-f0-9]{64}/, (hash) =>
             @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
