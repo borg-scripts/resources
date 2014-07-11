@@ -73,7 +73,13 @@ module.exports = -> _.assign @,
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
   execute: (cmd, [o]..., cb) =>
-    @ssh.cmd "#{if o?.sudo then 'sudo ' else ''}#{cmd}", o, cb
+    sudo = ''
+    if o?.sudo
+      if typeof o.sudo is 'boolean' and o.sudo is true
+        sudo = 'sudo '
+      else if typeof o.sudo is 'string'
+        sudo = "sudo -u#{o.sudo} "
+    @ssh.cmd "#{sudo}#{cmd}", o, cb
 
   install: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
@@ -121,6 +127,7 @@ module.exports = -> _.assign @,
         " #{path}", o, @mustExit 0, next
 
   directory: (paths, [o]..., cb) =>
+    o.mode ||= '0755'
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
         delete o.recursive
@@ -130,7 +137,7 @@ module.exports = -> _.assign @,
         return @skip "directory already exists.", setModeAndOwner unless necessary
         @execute "mkdir"+
           "#{if o?.recursive then ' -p' else ''}"+
-          " #{path}", sudo: true, setModeAndOwner
+          " #{path}", o, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
   download: (uris, [o]..., cb) =>
@@ -175,18 +182,20 @@ module.exports = -> _.assign @,
       @die err if err
       # render template from variables
       output = TemplateRenderer.render.apply variables, [template]
-      # hash rendered template output
-      tmp = crypto.createHash('sha1').update(output).digest('hex')
-      @log "rendered template #{o.to} version #{tmp}"
       console.log "---- BEGIN TEMPLATE ----\n#{output}\n--- END TEMPLATE ---"
-      tmpFile = path.join '/tmp/', tmp # NOTICE: for windows compatibility this could go into __dirname locally
-      o.final_to = o.to; o.to = '/tmp/'+tmp
-      # write rendered template to disk
-      fs.writeFile tmpFile, output, (err) =>
+      @strToFile output, o, cb
+
+   strToFile: (str, [o]..., cb) =>
+      ver = crypto.createHash('sha1').update(str).digest('hex')
+      @log "rendered file #{o.to} version #{ver}"
+      # write string to file on local disk
+      tmpFile = path.join '/tmp/', ver # NOTICE: for windows compatibility this could go into __dirname locally
+      o.final_to = o.to; o.to = '/tmp/'+ver
+      fs.writeFile tmpFile, str, (err) =>
         @die err if err
-        # upload template
+        # upload file
         @upload tmpFile, o, =>
-          # delete template
+          # delete file
           fs.unlink tmpFile, (err) =>
             @die err if err
             cb()
@@ -205,24 +214,48 @@ module.exports = -> _.assign @,
             @ssh.connect =>
               cb()
 
-  deploy_revision: (name, [o]..., cb) =>
-    # TODO: support git
+  user: (name, [o]..., cb) =>
+    # TODO: check for success. test if necessary
+    @execute "useradd #{name}", sudo: true, cb
+
+  group: (name, [o]..., cb) =>
+    # TODO: check for success. test if necessary
+    @execute "groupadd #{name}", sudo: true, cb
+
+  deploy: (name, [o]..., cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
-    releases_dir = path.join o.deploy_to, 'releases'
-    @ssh.cmd "sudo mkdir -p #{releases_dir}", {}, =>
-      out = ''
-      @ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
-        out += data.toString() if type isnt 'stderr'
-      ), (code, signal) =>
-        @die 'svn info failed' unless code is 0
-        @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
-        release_dir = path.join releases_dir, current_revision
-        @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
-          @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
-            @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
-              current_dir = path.join o.deploy_to, 'current'
-              link release_dir, current_dir, cb
+    o.sudo = o.owner
+    privateKeyPath = "/home/#{o.owner}/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
+    @directory "/home/#{o.owner}/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+      @directory "/home/#{o.owner}/.ssh/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+        # write ssh key to ~/.ssh/
+        @strToFile o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
+          # create the release dir
+          #echo -e "Host github.com\n\tStrictHostKeyChecking no\n" >> ~/.ssh/config
+          @test "DEBIAN_FRONTEND=text git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/^[a-f0-9]{40}/`, (matches) =>
+            remoteRef = matches[0]
+            release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
+            @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
+              out = ''
+              @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", (sudo: o.sudo, data: (chunk, type) =>
+                out += chunk
+                if chunk.match `/Are you sure you want to continue connecting \(yes\/no\)\?'/`
+                  chunk = ''
+                  @ssh.cmd "yes\n"
+              ), cb
+
+              #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
+              #  out += data.toString() if type isnt 'stderr'
+              #), (code, signal) =>
+              #  @die 'svn info failed' unless code is 0
+              #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
+              #  release_dir = path.join releases_dir, current_revision
+              #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
+              #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
+              #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
+              #        current_dir = path.join o.deploy_to, 'current'
+              #        link release_dir, current_dir, cb
 
   link: (src, target, cb) =>
     @ssh.cmd "[ -h #{target} ] && sudo rm #{target}; sudo ln -s #{src} #{target}", {}, cb
