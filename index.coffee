@@ -170,12 +170,13 @@ module.exports = -> _.assign @,
     @die "to is required." unless o?.to
     # TODO: not if path with same sha256sum already exists
     @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
-    @ssh.put paths, o.to, (err) =>
-      @die "error during SFTP file transfer: #{err}" if err
-      @log "SFTP upload complete."
-      @chown o.to, o, =>
-        @chmod o.to, o, =>
-          @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
+    @execute "rm -f #{o.to}", sudo: true, =>
+      @ssh.put paths, o.to, (err) =>
+        @die "error during SFTP file transfer: #{err}" if err
+        @log "SFTP upload complete."
+        @chown o.to, o, =>
+          @chmod o.to, o, =>
+            @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
     paths = path.join.apply null, @getNames paths
