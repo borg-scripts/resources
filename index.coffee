@@ -271,5 +271,15 @@ module.exports = -> _.assign @,
                 #        current_dir = path.join o.deploy_to, 'current'
                 #        link release_dir, current_dir, cb
 
+  setEnv: (k, [o]..., cb) =>
+    @die "value is required." unless o?.value?
+    # remove any lines referring to the same key; this prevents duplicates
+    file = "/etc/environment"
+    @execute "sed -i '/^#{k}=/d' #{file}", sudo: true, =>
+      # append key and value
+      @execute "echo '#{k}=#{o.value}' | sudo tee -a #{file} >/dev/null", @mustExit 0, cb #=>
+        ## set in current env
+        #@execute "export #{k}=\"#{o.value}\"", cb
+
   #cron: (name, [o]..., cb) ->
   #  cb()
