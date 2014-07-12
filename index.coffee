@@ -67,6 +67,15 @@ module.exports = -> _.assign @,
       else
         done_cb()
 
+  unless: (cmd, do_cb) =>
+    @then (cb) =>
+      @not_if cmd, (=>
+        old_Q = @_Q; @_Q = []
+        do_cb()
+        @finally =>
+          @_Q = old_Q
+          cb()
+      ), cb
 
   # actual resources
 
