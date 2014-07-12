@@ -88,7 +88,7 @@ module.exports = -> _.assign @,
         sudo = 'sudo '
       else if typeof o.sudo is 'string'
         sudo = "sudo -u#{o.sudo} "
-    @ssh.cmd "#{sudo}#{cmd}", o, cb
+    @ssh.cmd "#{if o?.cwd then "cd #{o.cwd} && " else ""}#{sudo}#{cmd}", o, cb
 
   install: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
