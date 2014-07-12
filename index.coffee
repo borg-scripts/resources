@@ -222,6 +222,15 @@ module.exports = -> _.assign @,
     # TODO: check for success. test if necessary
     @execute "groupadd #{name}", sudo: true, cb
 
+  link: (src, [o]..., cb) =>
+    @die "target is required." unless o?.target
+    @test "test -L #{o.target}", code: 1, (necessary) =>
+      if necessary
+        @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
+      else
+        @execute "rm #{o.target}", o, =>
+          @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
+
   deploy: (name, [o]..., cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
@@ -232,33 +241,25 @@ module.exports = -> _.assign @,
         # write ssh key to ~/.ssh/
         @strToFile o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
           # create the release dir
-          #echo -e "Host github.com\n\tStrictHostKeyChecking no\n" >> ~/.ssh/config
-          @test "DEBIAN_FRONTEND=text git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/^[a-f0-9]{40}/`, (matches) =>
-            remoteRef = matches[0]
-            release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
-            @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
-              out = ''
-              @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", (sudo: o.sudo, data: (chunk, type) =>
-                out += chunk
-                if chunk.match `/Are you sure you want to continue connecting \(yes\/no\)\?'/`
-                  chunk = ''
-                  @ssh.cmd "yes\n"
-              ), cb
+          @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a /home/#{o.owner}/.ssh/config", => # TODO: find a better alternative
+            @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
+              remoteRef = matches[0]
+              release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
+              @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
+                @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
+                  @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
 
-              #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
-              #  out += data.toString() if type isnt 'stderr'
-              #), (code, signal) =>
-              #  @die 'svn info failed' unless code is 0
-              #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
-              #  release_dir = path.join releases_dir, current_revision
-              #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
-              #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
-              #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
-              #        current_dir = path.join o.deploy_to, 'current'
-              #        link release_dir, current_dir, cb
-
-  link: (src, target, cb) =>
-    @ssh.cmd "[ -h #{target} ] && sudo rm #{target}; sudo ln -s #{src} #{target}", {}, cb
+                #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
+                #  out += data.toString() if type isnt 'stderr'
+                #), (code, signal) =>
+                #  @die 'svn info failed' unless code is 0
+                #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
+                #  release_dir = path.join releases_dir, current_revision
+                #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
+                #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
+                #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
+                #        current_dir = path.join o.deploy_to, 'current'
+                #        link release_dir, current_dir, cb
 
   #cron: (name, [o]..., cb) ->
   #  cb()
