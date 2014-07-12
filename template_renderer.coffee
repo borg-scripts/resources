@@ -9,9 +9,9 @@ module.exports =
     newline = "\n"
     x = 0
     out = "out = ''#{newline}"
-    lastToken = {}
+    lastToken = null
     plain = (t) ->
-      unless lastToken.returnable
+      unless lastToken is null or lastToken.returnable
         t = t.replace `/(\r?\n)/`, '' # strip one newline
       out += "#{indentation()}out += #{JSON.stringify t}#{newline}"
     variable = (v) -> out += "#{indentation()}out += #{v}#{newline}"
@@ -26,7 +26,10 @@ module.exports =
         x: arguments[4]
         len: arguments[0].length
       if token.x > x
-        plain template.substr x, token.x - x
+        t = template.substr x, token.x - x
+        unless token.returnable
+          t = t.replace `/[ \t]+$/`, '' # strip end line space
+        plain t
       if token.words.match `/^else */i`
         token.flow = true
         level--
