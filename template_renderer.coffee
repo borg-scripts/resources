@@ -1,5 +1,4 @@
 CoffeeScript = require 'coffee-script'
-vm = require 'vm'
 
 module.exports =
   # use render.apply(variables) to pass data to template
@@ -12,7 +11,7 @@ module.exports =
     out = "out = ''#{newline}"
     lastToken = {}
     plain = (t) ->
-      if lastToken.flow
+      unless lastToken.returnable
         t = t.replace `/(\r?\n)/`, '' # strip one newline
       out += "#{indentation()}out += #{JSON.stringify t}#{newline}"
     variable = (v) -> out += "#{indentation()}out += #{v}#{newline}"
@@ -28,8 +27,6 @@ module.exports =
         len: arguments[0].length
       if token.x > x
         plain template.substr x, token.x - x
-      if token.indent isnt 0
-        token.flow = true
       if token.words.match `/^else */i`
         token.flow = true
         level--
@@ -44,8 +41,10 @@ module.exports =
     if x < template.length
       plain template.substr x, template.length - x
     #console.log out
+    # TODO: wrap in try...catch, parse linenum from backtrace, echo coffee at linenum +/- 5 lines with printed line num and arrow on problem line
     js = CoffeeScript.compile out, bare: true
-    js = js.substr 7
+    final_out = ''
+    js = "#{js}\nfinal_out = out;"
     #console.log js
     eval js
-    return out
+    return final_out
