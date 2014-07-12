@@ -169,8 +169,8 @@ module.exports = -> _.assign @,
     paths = path.join.apply null, paths if Array.isArray paths
     @die "to is required." unless o?.to
     # TODO: not if path with same sha256sum already exists
-    @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
     @execute "rm -f #{o.to}", sudo: true, =>
+      @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
       @ssh.put paths, o.to, (err) =>
         @die "error during SFTP file transfer: #{err}" if err
         @log "SFTP upload complete."
@@ -192,12 +192,12 @@ module.exports = -> _.assign @,
       @die err if err
       # render template from variables
       output = TemplateRenderer.render.apply variables, [template]
-      console.log "---- BEGIN TEMPLATE ----\n#{output}\n--- END TEMPLATE ---"
       @strToFile output, o, cb
 
    strToFile: (str, [o]..., cb) =>
       ver = crypto.createHash('sha1').update(str).digest('hex')
       @log "rendered file #{o.to} version #{ver}"
+      console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
       # write string to file on local disk
       tmpFile = path.join '/tmp/', ver # NOTICE: for windows compatibility this could go into __dirname locally
       o.final_to = o.to; o.to = '/tmp/'+ver
