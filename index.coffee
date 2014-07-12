@@ -136,7 +136,7 @@ module.exports = -> _.assign @,
         " #{path}", o, @mustExit 0, next
 
   directory: (paths, [o]..., cb) =>
-    o.mode ||= '0755'
+    o ||= {}; o.mode ||= '0755'
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
         delete o.recursive
