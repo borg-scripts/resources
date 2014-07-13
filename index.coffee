@@ -6,6 +6,7 @@ crypto = require 'crypto'
 TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
 did_apt_get_update_this_session = false
+bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 
 module.exports = -> _.assign @,
   # validation
@@ -225,8 +226,33 @@ module.exports = -> _.assign @,
               cb()
 
   user: (name, [o]..., cb) =>
-    # TODO: check for success. test if necessary
-    @execute "useradd #{name}", sudo: true, cb
+    @test "id #{name}", code: 0, (exists) =>
+      return @skip "user #{name} exists.", cb if exists
+      cmd = "useradd #{name} \\\n"+
+        "  --create-home \\\n"+
+        "  --user-group \\\n"+
+        (if o?.comment then "  --comment #{bash_esc o.comment} \\\n" else "")+
+        (if o?.password then "  --password #{bash_esc o.password} \\\n" else "")+
+        "  --shell #{o.shell or "/bin/bash"} \\\n"+
+        "  ;"
+      @execute cmd, sudo: o?.sudo, =>
+        a = (next) =>
+          return next() unless o?.group_name
+          @execute "usermod -g #{o.group_name} #{name}", sudo: o?.sudo, next
+        b = (next) =>
+          return next() unless o?.groups?.length > 0
+          @each o.groups, next, (group, next) =>
+            @execute "usermod -a -G #{group} #{name}", sudo: o?.sudo, next
+        c = (next) =>
+          return next() unless o?.ssh_keys?.length > 0
+          @each o.ssh_keys, cb, (key, next) =>
+            home = "/home/#{name}"
+            @execute "mkdir -pm700 #{home}/.ssh/", sudo: o?.sudo, =>
+              @execute "touch #{home}/.ssh/authorized_keys", sudo: o?.sudo, =>
+                @execute "chmod 600 #{home}/.ssh/authorized_keys", sudo: o?.sudo, =>
+                  @execute "echo #{bash_esc key} | sudo tee -a #{home}/.ssh/authorized_keys >/dev/null", =>
+                    @execute "chown -R #{name}.#{name} #{home}/.ssh", sudo: o?.sudo, next
+        a( (-> b(-> c(-> cb() ) ) ) ) # execute in series; hide repetition; hide pyramid
 
   group: (name, [o]..., cb) =>
     # TODO: check for success. test if necessary
