@@ -255,8 +255,11 @@ module.exports = -> _.assign @,
         a( (-> b(-> c(-> cb() ) ) ) ) # execute in series; hide repetition; hide pyramid
 
   group: (name, [o]..., cb) =>
-    # TODO: check for success. test if necessary
-    @execute "groupadd #{name}", sudo: true, cb
+    @execute "groupadd #{name}", o, (code) =>
+      # NOTICE: can't pass cb directly as any code other than 0 would
+      #         be considered an error to the flow control next(err),
+      #         and here we don't care if there is an error.
+      cb()
 
   link: (src, [o]..., cb) =>
     @die "target is required." unless o?.target
