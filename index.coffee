@@ -274,14 +274,16 @@ module.exports = -> _.assign @,
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
     o.sudo = o.owner
-    privateKeyPath = "/home/#{o.owner}/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
-    @directory "/home/#{o.owner}/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
-      @directory "/home/#{o.owner}/.ssh/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+    home = if o.owner is 'root' then '/root' else "/home/#{o.owner}"
+    privateKeyPath = "#{home}/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
+    @directory "#{home}/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+      @directory "#{home}/.ssh/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
         # write ssh key to ~/.ssh/
         @strToFile o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
           # create the release dir
-          @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a /home/#{o.owner}/.ssh/config", => # TODO: find a better alternative
+          @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a #{home}/.ssh/config", => # TODO: find a better alternative
             @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
+              @die "can't reach github" unless Array.isArray matches
               remoteRef = matches[0]
               release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
               @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
