@@ -53,6 +53,8 @@ module.exports = -> _.assign @,
       for own k of o
         tuples.push [k, o[k]]
       @each tuples, done_cb, each_cb
+    else # empty
+      done_cb() # carry on
 
   not_if: (cmd, do_cb, done_cb) =>
     @test cmd, code: 0, (res) =>
