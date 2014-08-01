@@ -205,8 +205,9 @@ module.exports = -> _.assign @,
       @log "rendered file #{o.to} version #{ver}"
       console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
       # write string to file on local disk
-      tmpFile = path.join '/tmp/', ver # NOTICE: for windows compatibility this could go into __dirname locally
-      o.final_to = o.to; o.to = '/tmp/'+ver
+      # NOTICE: for windows compatibility this could go into __dirname locally
+      tmpFile = path.join '/tmp/', 'local-'+ver
+      o.final_to = o.to; o.to = '/tmp/remote-'+ver
       fs.writeFile tmpFile, str, (err) =>
         @die err if err
         # upload file
