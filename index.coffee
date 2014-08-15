@@ -166,10 +166,12 @@ module.exports = -> _.assign @,
             download() if necessary
       )(=>
         @execute "wget -nv #{uri}#{if o?.to then " -O #{o.to}" else ""}", o, =>
-          return nextFile() unless o?.checksum
-          @test "sha256sum #{o.to}", rx: /[a-f0-9]{64}/, (hash) =>
-            @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
-            nextFile()
+          @chown o.to, o, =>
+            @chmod o.to, o, =>
+              return nextFile() unless o?.checksum
+              @test "sha256sum #{o.to}", rx: /[a-f0-9]{64}/, (hash) =>
+                @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
+                nextFile()
       )
 
   # upload a file from localhost to the remote host with sftp
