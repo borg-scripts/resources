@@ -105,9 +105,11 @@ module.exports = -> _.assign @,
         # TODO: save .dotfile on remote host remembering last update date between sessions,
         #       and then check it and only run when its not there or has been >24hrs
         return next() if did_apt_get_update_this_session
-        @execute 'apt-get update', sudo: true, @mustExit 0, ->
+        @execute 'apt-get update', sudo: true, @mustExit 0, =>
           did_apt_get_update_this_session = true
-          next()
+          # also update packages to latest releases
+          @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, @mustExit 0, =>
+            next()
       )(=>
         @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
           "#{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
