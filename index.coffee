@@ -220,7 +220,7 @@ module.exports = -> _.assign @,
         @upload tmpFile, o, =>
           # delete file
           fs.unlink tmpFile, (err) =>
-            @die err if err
+            #@die err if err # for some reason, it does fail to cleanup locally sometimes--but we don't care enough to die
             cb()
 
   reboot: ([o]..., cb) =>
