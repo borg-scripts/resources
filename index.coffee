@@ -297,22 +297,23 @@ module.exports = -> _.assign @,
             @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
               @die "can't reach github" unless Array.isArray matches
               remoteRef = matches[0]
-              release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
-              @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
-                @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
-                  @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
+              @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
+                release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
+                @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
+                  @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
+                    @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
 
-                #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
-                #  out += data.toString() if type isnt 'stderr'
-                #), (code, signal) =>
-                #  @die 'svn info failed' unless code is 0
-                #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
-                #  release_dir = path.join releases_dir, current_revision
-                #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
-                #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
-                #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
-                #        current_dir = path.join o.deploy_to, 'current'
-                #        link release_dir, current_dir, cb
+                  #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
+                  #  out += data.toString() if type isnt 'stderr'
+                  #), (code, signal) =>
+                  #  @die 'svn info failed' unless code is 0
+                  #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
+                  #  release_dir = path.join releases_dir, current_revision
+                  #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
+                  #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
+                  #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
+                  #        current_dir = path.join o.deploy_to, 'current'
+                  #        link release_dir, current_dir, cb
 
   setEnv: (k, [o]..., cb) =>
     @die "value is required." unless o?.value?
