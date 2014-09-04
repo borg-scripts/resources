@@ -96,7 +96,15 @@ module.exports = -> _.assign @,
     else if o?.su
       cmd = if o?.cwd then "cd #{o.cwd} && #{cmd}" else cmd
       cmd = "sudo su - #{if typeof o.su is 'string' and o.su isnt 'root' then o.su+' ' else ''}-c #{bash_esc cmd}"
-    @ssh.cmd cmd, o, cb
+    return @ssh.cmd cmd, o, cb unless o?.retry?
+
+    tries = o.retry
+    try_again = => @ssh.cmd cmd, o, (code) =>
+      if code is 0 then cb code
+      else
+        if --tries > 0 then try_again()
+        else cb code
+    try_again()
 
   install: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
@@ -105,7 +113,7 @@ module.exports = -> _.assign @,
         # TODO: save .dotfile on remote host remembering last update date between sessions,
         #       and then check it and only run when its not there or has been >24hrs
         return next() if did_apt_get_update_this_session
-        @execute 'apt-get update', sudo: true, @mustExit 0, =>
+        @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
           did_apt_get_update_this_session = true
           # also update packages to latest releases
           @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, @mustExit 0, =>
