@@ -116,11 +116,11 @@ module.exports = -> _.assign @,
         @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
           did_apt_get_update_this_session = true
           # also update packages to latest releases
-          @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, @mustExit 0, =>
+          @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, @mustExit 0, =>
             next()
       )(=>
         @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
-          "#{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
+          "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, @mustExit 0, cb
       )
 
   uninstall: (pkgs, [o]..., cb) =>
