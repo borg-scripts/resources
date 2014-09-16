@@ -5,7 +5,6 @@ async = require 'async2'
 crypto = require 'crypto'
 TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
-did_apt_get_update_this_session = false
 bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 
 module.exports = -> _.assign @,
@@ -106,22 +105,18 @@ module.exports = -> _.assign @,
         else cb code
     try_again()
 
+  package_update: (cb) =>
+    # TODO: save .dotfile on remote host remembering last update date between sessions,
+    #       and then check it and only run when its not there or has been >24hrs
+    @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
+      # also update packages to latest releases
+      @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, @mustExit 0, cb
+
   install: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
       return @skip "package(s) already installed.", cb unless necessary
-      ((next) =>
-        # TODO: save .dotfile on remote host remembering last update date between sessions,
-        #       and then check it and only run when its not there or has been >24hrs
-        return next() if did_apt_get_update_this_session
-        @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
-          did_apt_get_update_this_session = true
-          # also update packages to latest releases
-          @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, @mustExit 0, =>
-            next()
-      )(=>
-        @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
-          "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, @mustExit 0, cb
-      )
+      @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
+        "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, @mustExit 0, cb
 
   uninstall: (pkgs, [o]..., cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
