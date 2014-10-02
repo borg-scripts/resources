@@ -27,7 +27,7 @@ module.exports = -> _.assign @,
     out = ''
     o =
       sudo: o?.sudo or false
-      data: (data, steam) => out += data
+      data: (data) => out += data
     @execute cmd, o, (code) =>
       if expected.code?
         cb code is expected.code
