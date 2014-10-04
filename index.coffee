@@ -332,5 +332,28 @@ module.exports = -> _.assign @,
         ## set in current env
         #@execute "export #{k}=\"#{o.value}\"", cb
 
+  addPackageSource: (k, [o]..., cb) =>
+    @die "Mirror is required." unless o?.mirror?
+    @die "Channel is required." unless o?.channel?
+    @die "Repository name is required." unless o?.repo?
+
+    @test "stat /usr/bin/apt", code: 0, (res) =>
+      return @skip "We don't know how to add a package source on non-Debian systems." if res
+      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" >> /etc/apt/sources.list"
+
+  file_append_line: (file_path, matching_string, replacement_line, cb) ->
+    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
+      return cb() if exited_zero
+      @execute "echo #{replacement_line} | sudo tee -a #{file_path}", (code) =>
+        die "FATAL ERROR: unable to append line." unless code is 0
+        return cb()
+  
+  file_replace_line: (file_path, matching_string, replacement_line, cb) ->
+    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
+      return cb() unless exited_zero
+      @execute "sed -i.bak #{file_path} s/#{matching_string}/#{replacement_line}/g", sudo: true, (code) =>
+        die "FATAL ERROR: unable to replace line." unless code is 0
+        return cb()
+    
+  # TODO: maybe put this in a vendor/cron repo
   #cron: (name, [o]..., cb) ->
-  #  cb()
