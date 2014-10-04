@@ -95,7 +95,12 @@ module.exports = -> _.assign @,
     else if o?.su
       cmd = if o?.cwd then "cd #{o.cwd} && #{cmd}" else cmd
       cmd = "sudo su - #{if typeof o.su is 'string' and o.su isnt 'root' then o.su+' ' else ''}-c #{bash_esc cmd}"
-    return @ssh.cmd cmd, o, cb unless o?.retry?
+    unless o?.retry?
+      return @ssh.cmd cmd, o, ->
+        if o?.ignore_errors
+          cb()
+        else
+          cb.apply null, arguments
 
     tries = o.retry
     try_again = => @ssh.cmd cmd, o, (code) =>
