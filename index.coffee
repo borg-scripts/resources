@@ -184,19 +184,42 @@ module.exports = -> _.assign @,
                 nextFile()
       )
 
+
+  test_v2: (cmd, [o]..., test_cb, success_cb, fail_cb) =>
+    @execute cmd, o, (code) =>
+      #cb if test_cb.apply code: code then null else die_msg
+      if test_cb.apply(code: code)
+        success_cb()
+      else
+        fail_cb()
+
   # upload a file from localhost to the remote host with sftp
   upload: (paths, [o]..., cb) =>
     paths = path.join.apply null, paths if Array.isArray paths
     @die "to is required." unless o?.to
-    # TODO: not if path with same sha256sum already exists
-    @execute "rm -f #{o.to}", sudo: true, =>
-      @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
-      @ssh.put paths, o.to, (err) =>
-        @die "error during SFTP file transfer: #{err}" if err
-        @log "SFTP upload complete."
-        @chown o.to, o, =>
-          @chmod o.to, o, =>
-            @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
+    o.force = true if typeof(o.force) == undefined
+    #TODO: not if path with same sha256sum already exists
+    #TODO: this will be broken out soon and can be removed
+    @test_v2 "stat #{o.to}", (-> @code is 0 and o.force is false), =>
+      @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
+    , =>
+      fs.readFile "#{paths}", encoding: 'utf-8', (err) =>
+        @die err if err
+      @execute "rm -f #{o.to}", sudo: true, =>
+        unless o?.final_to
+          final_to = o.to
+          to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+        else
+          final_to = o.final_to
+          to = o.to
+
+        @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
+        @ssh.put paths, to, (err) =>
+          @die "error during SFTP file transfer: #{err}" if err
+          @log "SFTP upload complete."
+          @chown to, o, =>
+            @chmod to, o, =>
+              @execute "mv #{to} #{final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
     paths = path.join.apply null, @getNames paths
