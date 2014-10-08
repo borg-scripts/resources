@@ -365,23 +365,32 @@ module.exports = -> _.assign @,
     @die "Channel is required." unless o?.channel?
     @die "Repository name is required." unless o?.repo?
 
-    @test "stat /usr/bin/apt", code: 0, (res) =>
-      return @skip "We don't know how to add a package source on non-Debian systems." if res
-      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" >> /etc/apt/sources.list"
+    @test_v2 "stat /usr/bin/apt", (-> @code is 0)
+    , =>
+      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" | sudo tee -a /etc/apt/sources.list", sudo: true, cb
+    , =>
+      @skip "we don't know how to add a package source on non-Debian systems", cb
 
-  file_append_line: (file_path, matching_string, replacement_line, cb) ->
-    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
-      return cb() if exited_zero
-      @execute "echo #{replacement_line} | sudo tee -a #{file_path}", (code) =>
-        die "FATAL ERROR: unable to append line." unless code is 0
-        return cb()
-  
-  file_replace_line: (file_path, matching_string, replacement_line, cb) ->
-    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
-      return cb() unless exited_zero
-      @execute "sed -i.bak #{file_path} s/#{matching_string}/#{replacement_line}/g", sudo: true, (code) =>
-        die "FATAL ERROR: unable to replace line." unless code is 0
-        return cb()
-    
+  file_append_line: (file_path, matching_string, replacement_line, cb) =>
+    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
+    , =>
+      @log "Matching line found, not appending"
+      cb()
+    , =>
+      @log "Matching line not found, appending..."
+      @execute "echo #{bash_esc replacement_line} | sudo tee -a #{bash_esc file_path}", (code) =>
+        @die "FATAL ERROR: unable to append line." unless code is 0
+      cb()
+
+  file_replace_line: (file_path, matching_string, replacement_line, cb) =>
+    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code isnt 0)
+    , =>
+      @log "Matching line found, replacing..."
+      @execute "sed -i.bak #{bash_esc file_path} s/#{bash_esc matching_string}/#{bash_esc replacement_line}/g", sudo: true, (code) =>
+        @die "FATAL ERROR: unable to replace line." unless code is 0
+        cb()
+    , =>
+      @log "Matching line not found, not replacing"
+      cb()
   # TODO: maybe put this in a vendor/cron repo
   #cron: (name, [o]..., cb) ->
