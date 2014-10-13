@@ -184,19 +184,42 @@ module.exports = -> _.assign @,
                 nextFile()
       )
 
+
+  test_v2: (cmd, [o]..., test_cb, success_cb, fail_cb) =>
+    @execute cmd, o, (code) =>
+      #cb if test_cb.apply code: code then null else die_msg
+      if test_cb.apply(code: code)
+        success_cb()
+      else
+        fail_cb()
+
   # upload a file from localhost to the remote host with sftp
   upload: (paths, [o]..., cb) =>
     paths = path.join.apply null, paths if Array.isArray paths
     @die "to is required." unless o?.to
-    # TODO: not if path with same sha256sum already exists
-    @execute "rm -f #{o.to}", sudo: true, =>
-      @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify o.to}..."
-      @ssh.put paths, o.to, (err) =>
-        @die "error during SFTP file transfer: #{err}" if err
-        @log "SFTP upload complete."
-        @chown o.to, o, =>
-          @chmod o.to, o, =>
-            @execute "mv #{o.to} #{o.final_to}", sudo: true, cb
+    o.force = true if typeof(o.force) == undefined
+    #TODO: not if path with same sha256sum already exists
+    #TODO: this will be broken out soon and can be removed
+    @test_v2 "stat #{o.to}", (-> @code is 0 and o.force is false), =>
+      @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
+    , =>
+      fs.readFile "#{paths}", encoding: 'utf-8', (err) =>
+        @die err if err
+      @execute "rm -f #{o.to}", sudo: true, =>
+        unless o?.final_to
+          final_to = o.to
+          to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+        else
+          final_to = o.final_to
+          to = o.to
+
+        @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
+        @ssh.put paths, to, (err) =>
+          @die "error during SFTP file transfer: #{err}" if err
+          @log "SFTP upload complete."
+          @chown to, o, =>
+            @chmod to, o, =>
+              @execute "mv #{to} #{final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
     paths = path.join.apply null, @getNames paths
@@ -342,23 +365,32 @@ module.exports = -> _.assign @,
     @die "Channel is required." unless o?.channel?
     @die "Repository name is required." unless o?.repo?
 
-    @test "stat /usr/bin/apt", code: 0, (res) =>
-      return @skip "We don't know how to add a package source on non-Debian systems." if res
-      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" >> /etc/apt/sources.list"
+    @test_v2 "stat /usr/bin/apt", (-> @code is 0)
+    , =>
+      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" | sudo tee -a /etc/apt/sources.list", sudo: true, cb
+    , =>
+      @skip "we don't know how to add a package source on non-Debian systems", cb
 
-  file_append_line: (file_path, matching_string, replacement_line, cb) ->
-    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
-      return cb() if exited_zero
-      @execute "echo #{replacement_line} | sudo tee -a #{file_path}", (code) =>
-        die "FATAL ERROR: unable to append line." unless code is 0
-        return cb()
-  
-  file_replace_line: (file_path, matching_string, replacement_line, cb) ->
-    @test "grep #{matching_string} #{file_path}", code: 0, (exited_zero) =>
-      return cb() unless exited_zero
-      @execute "sed -i.bak #{file_path} s/#{matching_string}/#{replacement_line}/g", sudo: true, (code) =>
-        die "FATAL ERROR: unable to replace line." unless code is 0
-        return cb()
-    
+  file_append_line: (file_path, matching_string, replacement_line, cb) =>
+    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
+    , =>
+      @log "Matching line found, not appending"
+      cb()
+    , =>
+      @log "Matching line not found, appending..."
+      @execute "echo #{bash_esc replacement_line} | sudo tee -a #{bash_esc file_path}", (code) =>
+        @die "FATAL ERROR: unable to append line." unless code is 0
+      cb()
+
+  file_replace_line: (file_path, matching_string, replacement_line, cb) =>
+    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code isnt 0)
+    , =>
+      @log "Matching line found, replacing..."
+      @execute "sed -i.bak #{bash_esc file_path} s/#{bash_esc matching_string}/#{bash_esc replacement_line}/g", sudo: true, (code) =>
+        @die "FATAL ERROR: unable to replace line." unless code is 0
+        cb()
+    , =>
+      @log "Matching line not found, not replacing"
+      cb()
   # TODO: maybe put this in a vendor/cron repo
   #cron: (name, [o]..., cb) ->
