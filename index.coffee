@@ -313,14 +313,15 @@ module.exports = -> _.assign @,
         @execute "rm #{o.target}", o, =>
           @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
 
-  # need a better name for this. 
+  # need a better name for this.
   # kind of want to make it part of @execute with some option passed or refactor to make it the norm
   get_remote_str: (cmd, cb) => out = ''; @execute cmd, ( data: (str) => out += str ), (code) => cb code, out.trim()
-  
+
   deploy: (name, [o]..., cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
     o.sudo = o.owner
+    o.keep_releases ||= 3
     @get_remote_str "echo ~#{o.owner}", (code, home) =>
       privateKeyPath = "#{home}/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
       @directory "#{home}/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
@@ -337,7 +338,7 @@ module.exports = -> _.assign @,
                   @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
                     @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
                       @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
-  
+
                     #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
                     #  out += data.toString() if type isnt 'stderr'
                     #), (code, signal) =>
@@ -372,6 +373,7 @@ module.exports = -> _.assign @,
       @skip "we don't know how to add a package source on non-Debian systems", cb
 
   file_append_line: (file_path, matching_string, replacement_line, cb) =>
+    # TODO: should make this optionally take o.sudo, o.mode, etc.
     @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
     , =>
       @log "Matching line found, not appending"
