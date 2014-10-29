@@ -48,6 +48,5 @@ module.exports =
     js = CoffeeScript.compile out, bare: true
     final_out = ''
     js = "#{js}\nfinal_out = out;"
-    #console.log js
-    eval js
+    eval(js) or console.log js
     return final_out
