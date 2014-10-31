@@ -158,8 +158,8 @@ module.exports = -> _.assign @,
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
         delete o.recursive
-        @chown path, o, =>
-          @chmod path, o, next
+        @chown [path], o, =>
+          @chmod [path], o, next
       @test "test -d #{path}", code: 1, (necessary) =>
         return @skip "directory already exists.", setModeAndOwner unless necessary
         @execute "mkdir"+
@@ -322,8 +322,8 @@ module.exports = -> _.assign @,
     o.sudo = o.owner
     o.keep_releases ||= 3
     privateKeyPath = "$(echo ~#{o.owner})/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
-    @directory "$(echo ~#{o.owner})/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
-      @directory "$(echo ~#{o.owner})/.ssh/", owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+    @directory ["$(echo ~#{o.owner})/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
+      @directory ["$(echo ~#{o.owner})/.ssh/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
         # write ssh key to ~/.ssh/
         @strToFile o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
           # create the release dir
