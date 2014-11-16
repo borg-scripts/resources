@@ -222,20 +222,29 @@ module.exports = -> _.assign @,
               @execute "mv #{to} #{final_to}", sudo: true, cb
 
   template: (paths, [o]..., cb) =>
-    paths = path.join.apply null, @getNames paths
-    @die "to is required." unless o?.to
-    # use attrs from @server namespace
-    variables = server: @server, networks: @networks
-    if o?.variables
-      # variables will only apply if not provided anywhere else
-      variables = _.merge o.variables, variables
-      o.variables = null
-    # read template
-    fs.readFile "#{paths}.coffee", encoding: 'utf-8', (err, template) =>
+    a = =>
+      if o?.content
+        o.to = paths
+        b null, o.content
+      else
+        # read template from disk
+        paths = path.join.apply null, @getNames paths
+        fs.readFile "#{paths}.coffee", encoding: 'utf-8', b
+    b = (err, template) =>
+      @die "to is required." unless o?.to
       @die err if err
+      # compile template variables
+      # from @server attributes
+      variables = server: @server, networks: @networks
+      # and provided variables key
+      if o?.variables
+        variables = _.merge o.variables, variables
+        o.variables = null # prevent template from accidentally modifying provided object
+
       # render template from variables
       output = TemplateRenderer.render.apply variables, [template]
       @strToFile output, o, cb
+    a b
 
    strToFile: (str, [o]..., cb) =>
       ver = crypto.createHash('sha1').update(str).digest('hex')
