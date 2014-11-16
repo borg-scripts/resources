@@ -247,7 +247,7 @@ module.exports = -> _.assign @,
     a b
 
    strToFile: (str, [o]..., cb) =>
-      ver = crypto.createHash('sha1').update(str).digest('hex')
+      ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
       @log "rendered file #{o.to} version #{ver}"
       console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
       # write string to file on local disk
