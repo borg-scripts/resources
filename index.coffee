@@ -200,7 +200,7 @@ module.exports = -> _.assign @,
     o.force = true if typeof(o.force) == undefined
     #TODO: not if path with same sha256sum already exists
     #TODO: this will be broken out soon and can be removed
-    @test_v2 "stat #{o.to}", (-> @code is 0 and o.force is false), =>
+    @test_v2 "stat #{o.to}", sudo: o?.sudo, (-> @code is 0 and o.force is false), =>
       @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
     , =>
       fs.readFile "#{paths}", encoding: 'utf-8', (err) =>
