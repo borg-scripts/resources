@@ -155,6 +155,7 @@ module.exports = -> _.assign @,
 
   directory: (paths, [o]..., cb) =>
     o ||= {}; o.mode ||= '0755'
+    recursive = o.recursive
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
         delete o.recursive
@@ -163,7 +164,7 @@ module.exports = -> _.assign @,
       @test "test -d #{path}", code: 1, (necessary) =>
         return @skip "directory already exists.", setModeAndOwner unless necessary
         @execute "mkdir"+
-          "#{if o?.recursive then ' -p' else ''}"+
+          "#{if recursive then ' -p' else ''}"+
           " #{path}", o, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
