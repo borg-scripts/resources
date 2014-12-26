@@ -224,7 +224,7 @@ module.exports = -> _.assign @,
 
   template: (paths, [o]..., cb) =>
     a = =>
-      if o?.content
+      if o?.hasOwnProperty 'content'
         o.to = paths
         b null, o.content
       else
