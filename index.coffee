@@ -393,10 +393,10 @@ module.exports = -> _.assign @,
       cb()
 
   file_replace_line: (file_path, matching_string, replacement_line, cb) =>
-    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code isnt 0)
+    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
     , =>
       @log "Matching line found, replacing..."
-      @execute "sed -i.bak #{bash_esc file_path} s/#{bash_esc matching_string}/#{bash_esc replacement_line}/g", sudo: true, (code) =>
+      @execute "sed -i #{bash_esc "s/#{matching_string}.*/#{bash_esc replacement_line}/"} #{bash_esc file_path}", sudo: true, (code) =>
         @die "FATAL ERROR: unable to replace line." unless code is 0
         cb()
     , =>
