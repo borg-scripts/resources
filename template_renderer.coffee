@@ -15,6 +15,7 @@ module.exports =
         t = t.replace `/(\r?\n)/`, '' # strip one newline
       out += "#{indentation()}out += #{JSON.stringify t}#{newline}"
     variable = (v) -> out += "#{indentation()}out += #{v}#{newline}"
+    template = template.replace '#{', '\#{' # disallow usual coffee string interpolation because ruby templates use it, too
     template.replace `/<%(=?) *(.+?) *(:?) *%>/g`, ->
       token =
         returnable: arguments[1] is '='

@@ -8,82 +8,17 @@ delay = (s, f) -> setTimeout f, s
 bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 
 module.exports = -> _.assign @,
-  # validation
-
   # use with resources that accept multiple values in the name argument
   getNames: (names) =>
     names = if Array.isArray names then names else names.compact().split ' '
     @die "One or more names are required." if names.length is 0
     return names
 
-  # use with @execute() to validate the exit status code
-  mustExit: (expected, cb) => (code) =>
-    return cb code if code is expected
-    @die "Expected exit code #{expected} but got #{code}."
-
-  # use in situations where a simple test could avert two or more commands,
-  # long-running commands, or potentially destructive commands.
-  test: (cmd, [o]..., expected, cb) =>
-    out = ''
-    o =
-      sudo: o?.sudo or false
-      data: (data) => out += data
-    @execute cmd, o, (code) =>
-      if expected.code?
-        cb code is expected.code
-      else if expected.rx?
-        cb expected.rx.exec out
-
-  # use in situations where failures are okay (compare @die()),
-  # and to notify the user why you are skipping a command.
-  skip: (reason, cb) =>
-    @log "Skipping command(s) because #{reason}"
-    cb()
-
-  # used to asynchronously iterate an array or an object in series
-  each: (o, done_cb, each_cb, i=0) =>
-    if Array.isArray o
-      if o[i]?
-        each_cb o[i], => @each o, done_cb, each_cb, i+1
-      else
-        done_cb()
-    else if typeof o is 'object'
-      tuples = []
-      for own k of o
-        tuples.push [k, o[k]]
-      @each tuples, done_cb, each_cb
-    else # empty
-      done_cb() # carry on
-
-  not_if: (cmd, do_cb, done_cb) =>
-    @test cmd, code: 0, (res) =>
-      unless res
-        do_cb done_cb
-      else
-        done_cb()
-
-  only_if: (cmd, do_cb, done_cb) =>
-    @test cmd, code: 0, (res) =>
-      if res
-        do_cb done_cb
-      else
-        done_cb()
-
-  unless: (cmd, do_cb) =>
-    @then (cb) =>
-      @not_if cmd, (=>
-        old_Q = @_Q; @_Q = []
-        do_cb()
-        @finally =>
-          @_Q = old_Q
-          cb()
-      ), cb
-
-  # actual resources
-
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
-  execute: (cmd, [o]..., cb) =>
+  execute: (cmd, [o]...) => (cb) =>
+    console.log '@execute() called'
+    console.log '@ssh = ', @ssh
     sudo = ''
     if o?.sudo
       if typeof o.sudo is 'boolean' and o.sudo is true
@@ -110,34 +45,71 @@ module.exports = -> _.assign @,
         else cb code
     try_again()
 
-  package_update: (cb) =>
+  # use in situations where a single test command could avoid
+  # additional, long-running, or potentially destructive commands.
+  test: (cmd, [o]..., test_cb) => (cb) =>
+    out = ''
+    o =
+      sudo: o?.sudo or false
+      data: (data) => out += data
+    @execute(cmd, o)(code) =>
+      @inject_flow cb, =>
+        test_cb code: code, out: out
+
+  # appends line only if no matching line is found
+  append_line_to_file: (file, [o]...) => (cb) =>
+    @die "@file_append_line() unless_find and append are required." unless o?.unless_find and o?.append
+    @test "grep #{bash_esc o.unless_find} #{bash_esc file}", o, (-> @code is 0)
+    , =>
+      @log "Matching line found, not appending"
+      cb()
+    , =>
+      @log "Matching line not found, appending..."
+      @execute "echo #{bash_esc o.append} | sudo tee -a #{bash_esc file}", o, (code) =>
+        @die "FATAL ERROR: unable to append line." unless code is 0
+      cb()
+
+  # replaces line only when/where matching line is found
+  replace_line_in_file: (file, [o]...) => (cb) =>
+    @die "@file_replace_line() when_find and replace are required." unless o?.if_find and o?.replace
+    @test "grep #{bash_esc o.if_find} #{bash_esc file}", o, (-> @code is 0)
+    , =>
+      @log "Matching line found, replacing..."
+      @execute "sed -i #{bash_esc "s/#{o.if_find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", o, (code) =>
+        @die "FATAL ERROR: unable to replace line." unless code is 0
+        cb()
+    , =>
+      @log "Matching line not found, not replacing"
+      cb()
+
+  package_update: => (cb) =>
     # TODO: save .dotfile on remote host remembering last update date between sessions,
     #       and then check it and only run when its not there or has been >24hrs
     @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
       # also update packages to latest releases
       @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, @mustExit 0, cb
 
-  install: (pkgs, [o]..., cb) =>
+  install: (pkgs, [o]...) => (cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
       return @skip "package(s) already installed.", cb unless necessary
       @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
         "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, @mustExit 0, cb
 
-  uninstall: (pkgs, [o]..., cb) =>
+  uninstall: (pkgs, [o]...) => (cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
       return @skip "package(s) already uninstalled.", cb unless necessary
       @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
         " -y #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
 
-  service: (pkgs, [o]..., cb) =>
+  service: (pkgs, [o]...) => (cb) =>
     @each @getNames(pkgs), cb, (pkg, next) =>
       @execute "service "+
         "#{pkg}"+
         " #{o?.action or 'start'}", sudo: true, @mustExit 0, next
 
-  chown: (paths, [o]..., cb) =>
-    @die "owner and/or group are required." unless o?.owner or o?.group
+  chown: (paths, [o]...) => (cb) =>
+    @die "@chown() owner and/or group are required." unless o?.owner or o?.group
     @each @getNames(paths), cb, (path, next) =>
       @execute "chown "+
         "#{if o?.recursive then '-R ' else ''}"+
@@ -145,7 +117,7 @@ module.exports = -> _.assign @,
         ".#{o?.group}"+
         " #{path}", o, @mustExit 0, next
 
-  chmod: (paths, o, cb) =>
+  chmod: (paths, o) => (cb) =>
     @die "mode is required." unless o?.mode
     @each @getNames(paths), cb, (path, next) =>
       @execute "chmod "+
@@ -153,7 +125,7 @@ module.exports = -> _.assign @,
         "#{o?.mode}"+
         " #{path}", o, @mustExit 0, next
 
-  directory: (paths, [o]..., cb) =>
+  directory: (paths, [o]...) => (cb) =>
     o ||= {}; o.mode ||= '0755'
     recursive = o.recursive
     @each @getNames(paths), cb, (path, next) =>
@@ -168,7 +140,7 @@ module.exports = -> _.assign @,
           " #{path}", o, setModeAndOwner
 
   # download a file from the internet to the remote host with wget
-  download: (uris, [o]..., cb) =>
+  download: (uris, [o]...) => (cb) =>
     @die "to is required." unless o?.to
     @each @getNames(uris), cb, (uri, nextFile) =>
       ((download)=>
@@ -185,17 +157,8 @@ module.exports = -> _.assign @,
                 nextFile()
       )
 
-
-  test_v2: (cmd, [o]..., test_cb, success_cb, fail_cb) =>
-    @execute cmd, o, (code) =>
-      #cb if test_cb.apply code: code then null else die_msg
-      if test_cb.apply(code: code)
-        success_cb()
-      else
-        fail_cb()
-
   # upload a file from localhost to the remote host with sftp
-  upload: (paths, [o]..., cb) =>
+  upload: (paths, [o]...) => (cb) =>
     paths = path.join.apply null, paths if Array.isArray paths
     @die "to is required." unless o?.to
     o.force = true if typeof(o.force) == undefined
@@ -222,7 +185,7 @@ module.exports = -> _.assign @,
             @chmod to, o, =>
               @execute "mv #{to} #{final_to}", sudo: true, cb
 
-  template: (paths, [o]..., cb) =>
+  template: (paths, [o]...) => (cb) =>
     a = =>
       if o?.hasOwnProperty 'content'
         o.to = paths
@@ -247,7 +210,7 @@ module.exports = -> _.assign @,
       @strToFile output, o, cb
     a b
 
-   strToFile: (str, [o]..., cb) =>
+   strToFile: (str, [o]...) => (cb) =>
       ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
       @log "rendered file #{o.to} version #{ver}"
       console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
@@ -264,7 +227,7 @@ module.exports = -> _.assign @,
             #@die err if err # for some reason, it does fail to cleanup locally sometimes--but we don't care enough to die
             cb()
 
-  reboot: ([o]..., cb) =>
+  reboot: ([o]...) => (cb) =>
     o ||= {}; o.wait ||= 60*1000
     @log '''
     ###############################
@@ -278,7 +241,7 @@ module.exports = -> _.assign @,
             @ssh.connect =>
               cb()
 
-  user: (name, [o]..., cb) =>
+  user: (name, [o]...) => (cb) =>
     @test "id #{name}", code: 0, (exists) =>
       return @skip "user #{name} exists.", cb if exists
       cmd = "useradd #{name} \\\n"+
@@ -306,14 +269,14 @@ module.exports = -> _.assign @,
                     @execute "chown -R #{name}.#{name} $(echo ~#{name})/.ssh", sudo: o?.sudo, next
         a( (-> b(-> c(-> cb() ) ) ) ) # execute in series; hide repetition; hide pyramid
 
-  group: (name, [o]..., cb) =>
+  group: (name, [o]...) => (cb) =>
     @execute "groupadd #{name}", o, (code) =>
       # NOTICE: can't pass cb directly as any code other than 0 would
       #         be considered an error to the flow control next(err),
       #         and here we don't care if there is an error.
       cb()
 
-  link: (src, [o]..., cb) =>
+  link: (src, [o]...) => (cb) =>
     @die "target is required." unless o?.target
     @test "test -L #{o.target}", code: 1, (necessary) =>
       if necessary
@@ -322,11 +285,7 @@ module.exports = -> _.assign @,
         @execute "rm #{o.target}", o, =>
           @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
 
-  # need a better name for this.
-  # kind of want to make it part of @execute with some option passed or refactor to make it the norm
-  get_remote_str: (cmd, cb) => out = ''; @execute cmd, ( data: (str) => out += str ), (code) => cb code, out.trim()
-
-  deploy: (name, [o]..., cb) =>
+  deploy: (name, [o]...) => (cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
     o.sudo = o.owner
@@ -358,49 +317,3 @@ module.exports = -> _.assign @,
                   #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
                   #        current_dir = path.join o.deploy_to, 'current'
                   #        link release_dir, current_dir, cb
-
-  setEnv: (k, [o]..., cb) =>
-    @die "value is required." unless o?.value?
-    # remove any lines referring to the same key; this prevents duplicates
-    file = "/etc/environment"
-    @execute "sed -i '/^#{k}=/d' #{file}", sudo: true, =>
-      # append key and value
-      @execute "echo '#{k}=#{o.value}' | sudo tee -a #{file} >/dev/null", @mustExit 0, cb #=>
-        ## set in current env
-        #@execute "export #{k}=\"#{o.value}\"", cb
-
-  addPackageSource: (k, [o]..., cb) =>
-    @die "Mirror is required." unless o?.mirror?
-    @die "Channel is required." unless o?.channel?
-    @die "Repository name is required." unless o?.repo?
-
-    @test_v2 "stat /usr/bin/apt", (-> @code is 0)
-    , =>
-      @execute "echo \"deb #{o.mirror} #{o.channel} #{o.repo}\" | sudo tee -a /etc/apt/sources.list", sudo: true, cb
-    , =>
-      @skip "we don't know how to add a package source on non-Debian systems", cb
-
-  file_append_line: (file_path, matching_string, replacement_line, cb) =>
-    # TODO: should make this optionally take o.sudo, o.mode, etc.
-    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
-    , =>
-      @log "Matching line found, not appending"
-      cb()
-    , =>
-      @log "Matching line not found, appending..."
-      @execute "echo #{bash_esc replacement_line} | sudo tee -a #{bash_esc file_path}", (code) =>
-        @die "FATAL ERROR: unable to append line." unless code is 0
-      cb()
-
-  file_replace_line: (file_path, matching_string, replacement_line, cb) =>
-    @test_v2 "grep #{bash_esc matching_string} #{bash_esc file_path}", (-> @code is 0)
-    , =>
-      @log "Matching line found, replacing..."
-      @execute "sed -i #{bash_esc "s/#{matching_string}.*/#{bash_esc replacement_line}/"} #{bash_esc file_path}", sudo: true, (code) =>
-        @die "FATAL ERROR: unable to replace line." unless code is 0
-        cb()
-    , =>
-      @log "Matching line not found, not replacing"
-      cb()
-  # TODO: maybe put this in a vendor/cron repo
-  #cron: (name, [o]..., cb) ->
