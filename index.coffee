@@ -17,44 +17,57 @@ module.exports = -> _.assign @,
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
   execute: (cmd, [o]...) => (cb) =>
-    console.log '@execute() called'
-    console.log '@ssh = ', @ssh
+    o ||= {}
     sudo = ''
-    if o?.sudo
+    if o.sudo
       if typeof o.sudo is 'boolean' and o.sudo is true
         sudo = 'sudo '
       else if typeof o.sudo is 'string'
         sudo = 'sudo '
         sudo += "-u#{o.sudo} " if o.sudo isnt 'root'
-      cmd = "#{if o?.cwd then "cd #{o.cwd} && " else ""}#{sudo}#{cmd}"
-    else if o?.su
-      cmd = if o?.cwd then "cd #{o.cwd} && #{cmd}" else cmd
+      cmd = "#{if o.cwd then "cd #{o.cwd} && " else ""}#{sudo}#{cmd}"
+    else if o.su
+      cmd = if o.cwd then "cd #{o.cwd} && #{cmd}" else cmd
       cmd = "sudo su - #{if typeof o.su is 'string' and o.su isnt 'root' then o.su+' ' else ''}-c #{bash_esc cmd}"
-    unless o?.retry?
-      return @ssh.cmd cmd, o, ->
-        if o?.ignore_errors
-          cb()
-        else
-          cb.apply null, arguments
 
-    tries = o.retry
-    try_again = => @ssh.cmd cmd, o, (code) =>
-      if code is 0 then cb code
-      else
-        if --tries > 0 then try_again()
-        else cb code
+    tries_remaining = o.retry
+    try_again = null; try_again = =>
+      error = null; out = ''; o.data ||= (data) => out += data
+      @ssh.cmd cmd, o, (code) =>
+        o.expect ||= 0 unless o.ignore_errors
+        if 'expect' of o
+          error = switch typeof o.expect
+            when 'object' then if null is out.match o.expect # rx match output
+              "Expected regex #{o.expect} to match output, but it doesn't."
+            when 'number' then if code isnt o.expect # int match exit code
+              "Expected exit code #{o.expect}, but got #{code}."
+            when 'string' then if -1 is out.indexOf o.expect # case-sensitive string match output
+              "Expected string #{JSON.stringify o.expect} to match case-sensitive output, but it doesn't."
+            else
+              "Unexpected typeof expect passed to @execute(). Cannot continue."
+
+        if code isnt 0 and not error
+          @log("NOTICE: Non-zero exit code #{o.expect} was expected. Will continue.") =>
+
+        if error
+          if o.retry
+            if --tries_remaining > 0
+              @log(type: 'err', "#{error} Will try again...") =>
+                try_again()
+            else
+              @die "#{error} Tried #{o.retry} times. Giving up."
+          else
+            @die error
+        else
+          cb if o.ignore_errors then null else code: code, out: out
     try_again()
 
   # use in situations where a single test command could avoid
   # additional, long-running, or potentially destructive commands.
   test: (cmd, [o]..., test_cb) => (cb) =>
-    out = ''
-    o =
-      sudo: o?.sudo or false
-      data: (data) => out += data
-    @execute(cmd, o)(code) =>
+    @execute(cmd, o)(output) =>
       @inject_flow cb, =>
-        test_cb code: code, out: out
+        test_cb output
 
   # appends line only if no matching line is found
   append_line_to_file: (file, [o]...) => (cb) =>
@@ -82,31 +95,31 @@ module.exports = -> _.assign @,
       @log "Matching line not found, not replacing"
       cb()
 
-  package_update: => (cb) =>
+  package_update: => (cb) => @inject_flow cb, =>
     # TODO: save .dotfile on remote host remembering last update date between sessions,
     #       and then check it and only run when its not there or has been >24hrs
-    @execute 'apt-get update', sudo: true, retry: 3, @mustExit 0, =>
-      # also update packages to latest releases
-      @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, @mustExit 0, cb
+    @then @execute 'apt-get update', sudo: true, retry: 3, expect: 0
+    # also update packages to latest releases
+    @then @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, expect: 0
 
   install: (pkgs, [o]...) => (cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
       return @skip "package(s) already installed.", cb unless necessary
       @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
-        "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, @mustExit 0, cb
+        "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, expect: 0, cb
 
   uninstall: (pkgs, [o]...) => (cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
       return @skip "package(s) already uninstalled.", cb unless necessary
       @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
-        " -y #{@getNames(pkgs).join ' '}", sudo: true, @mustExit 0, cb
+        " -y #{@getNames(pkgs).join ' '}", sudo: true, expect: 0, cb
 
   service: (pkgs, [o]...) => (cb) =>
     @each @getNames(pkgs), cb, (pkg, next) =>
       @execute "service "+
         "#{pkg}"+
-        " #{o?.action or 'start'}", sudo: true, @mustExit 0, next
+        " #{o?.action or 'start'}", sudo: true, expect: 0, next
 
   chown: (paths, [o]...) => (cb) =>
     @die "@chown() owner and/or group are required." unless o?.owner or o?.group
@@ -115,7 +128,7 @@ module.exports = -> _.assign @,
         "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.owner}"+
         ".#{o?.group}"+
-        " #{path}", o, @mustExit 0, next
+        " #{path}", o, expect: 0, next
 
   chmod: (paths, o) => (cb) =>
     @die "mode is required." unless o?.mode
@@ -123,7 +136,7 @@ module.exports = -> _.assign @,
       @execute "chmod "+
         "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.mode}"+
-        " #{path}", o, @mustExit 0, next
+        " #{path}", o, expect: 0, next
 
   directory: (paths, [o]...) => (cb) =>
     o ||= {}; o.mode ||= '0755'
@@ -280,10 +293,10 @@ module.exports = -> _.assign @,
     @die "target is required." unless o?.target
     @test "test -L #{o.target}", code: 1, (necessary) =>
       if necessary
-        @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
+        @execute "ln -s #{src} #{o.target}", o, expect: 0, cb
       else
         @execute "rm #{o.target}", o, =>
-          @execute "ln -s #{src} #{o.target}", o, @mustExit 0, cb
+          @execute "ln -s #{src} #{o.target}", o, expect: 0, cb
 
   deploy: (name, [o]...) => (cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff

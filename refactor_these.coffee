@@ -1,11 +1,5 @@
   # validation
 
-
-  # use with @execute() to validate the exit status code
-  mustExit: (expected, cb) => (code) =>
-    return cb code if code is expected
-    @die "Expected exit code #{expected} but got #{code}."
-
   # use in situations where failures are okay (compare @die()),
   # and to notify the user why you are skipping a command.
   skip: (reason) => (cb) =>
@@ -77,7 +71,7 @@
     file = "/etc/environment"
     @execute "sed -i '/^#{k}=/d' #{file}", sudo: true, =>
       # append key and value
-      @execute "echo '#{k}=#{o.value}' | sudo tee -a #{file} >/dev/null", @mustExit 0, cb #=>
+      @execute "echo '#{k}=#{o.value}' | sudo tee -a #{file} >/dev/null", expect: 0, cb #=>
         ## set in current env
         #@execute "export #{k}=\"#{o.value}\"", cb
 
