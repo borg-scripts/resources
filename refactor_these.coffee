@@ -1,11 +1,5 @@
   # validation
 
-  # use in situations where failures are okay (compare @die()),
-  # and to notify the user why you are skipping a command.
-  skip: (reason) => (cb) =>
-    @log "Skipping command(s) because #{reason}"
-    cb()
-
   # used to asynchronously iterate an array or an object in series
   each: (o, done_cb, each_cb, i=0) =>
     if Array.isArray o
