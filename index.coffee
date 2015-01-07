@@ -34,6 +34,14 @@ module.exports = -> _.assign @,
     try_again = null; try_again = =>
       error = null; out = ''; o.data ||= (data) => out += data
       @ssh.cmd cmd, o, (code) =>
+        # use test in situations where a single test command could avoid
+        # additional, long-running, or potentially destructive commands;
+        # for when you want to do your own custom logic to handle and react
+        # to the result of the execution.
+        if typeof o.test is 'function'
+          @inject_flow(=> o.test code: code, out: out)(cb)
+          return
+
         o.expect ||= 0 unless o.ignore_errors
         if 'expect' of o
           error = switch typeof o.expect
@@ -61,13 +69,6 @@ module.exports = -> _.assign @,
         else
           cb (if o.ignore_errors then null else error), code: code, out: out
     try_again()
-
-  # use in situations where a single test command could avoid
-  # additional, long-running, or potentially destructive commands.
-  test: (cmd, [o]..., test_cb) => (cb) =>
-    @execute(cmd, o)(output) =>
-      @inject_flow cb, =>
-        test_cb output
 
   # appends line only if no matching line is found
   append_line_to_file: (file, [o]...) => (cb) =>
