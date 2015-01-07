@@ -59,7 +59,7 @@ module.exports = -> _.assign @,
           else
             @die error
         else
-          cb if o.ignore_errors then null else code: code, out: out
+          cb (if o.ignore_errors then null else error), code: code, out: out
     try_again()
 
   # use in situations where a single test command could avoid
@@ -95,18 +95,18 @@ module.exports = -> _.assign @,
       @log "Matching line not found, not replacing"
       cb()
 
-  package_update: => (cb) => @inject_flow cb, =>
+  package_update: => @inject_flow =>
     # TODO: save .dotfile on remote host remembering last update date between sessions,
     #       and then check it and only run when its not there or has been >24hrs
     @then @execute 'apt-get update', sudo: true, retry: 3, expect: 0
     # also update packages to latest releases
     @then @execute 'DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y', sudo: true, retry: 3, expect: 0
 
-  install: (pkgs, [o]...) => (cb) =>
-    @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", code: 0, (necessary) =>
-      return @skip "package(s) already installed.", cb unless necessary
-      @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
-        "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, expect: 0, cb
+  install: (pkgs, [o]...) => @inject_flow =>
+    @then @execute "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", test: ({code}) =>
+      return @then @log "Skipping package(s) already installed." if code is 0
+      @then @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
+        "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, expect: 0
 
   uninstall: (pkgs, [o]...) => (cb) =>
     @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
