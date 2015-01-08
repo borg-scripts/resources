@@ -339,7 +339,7 @@ module.exports = -> _.assign @,
           # create the release dir
           @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a $(echo ~#{o.owner})/.ssh/config", => # TODO: find a better alternative
             @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
-              @die "can't reach github" unless Array.isArray matches
+              @die "github repo didn't have the branch we're expecting #{o.git.branch}" unless Array.isArray matches
               remoteRef = matches[0]
               @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
                 release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
