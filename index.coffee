@@ -14,6 +14,21 @@ module.exports = -> _.assign @,
     @die "One or more names are required." if names.length is 0
     return names
 
+  # used to asynchronously iterate an array or an object in series
+  each: (o, done_cb, each_cb, i=0) =>
+    if Array.isArray o
+      if o[i]?
+        each_cb o[i], => @each o, done_cb, each_cb, i+1
+      else
+        done_cb()
+    else if typeof o is 'object'
+      tuples = []
+      for own k of o
+        tuples.push [k, o[k]]
+      @each tuples, done_cb, each_cb
+    else # empty
+      done_cb() # carry on
+
   # use when you are sure the cmd does not need to be os agnostic,
   # or when you are sure you will only ever operate on one os
   execute: (cmd, [o]...) => (cb) =>
@@ -109,12 +124,12 @@ module.exports = -> _.assign @,
       @then @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
         "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, expect: 0
 
-  uninstall: (pkgs, [o]...) => (cb) =>
-    @test "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", code: 0, (necessary) =>
-      return @skip "package(s) already uninstalled.", cb unless necessary
-      @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
+  uninstall: (pkgs, [o]...) => @inject_flow =>
+    @then @execute "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", test: ({code}) =>
+      return @then @log "Skipping package(s) already uninstalled." if code is 0
+      @then @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
-        " -y #{@getNames(pkgs).join ' '}", sudo: true, expect: 0, cb
+        " -y #{@getNames(pkgs).join ' '}", sudo: true, expect: 0
 
   service: (pkgs, [o]...) => (cb) =>
     @each @getNames(pkgs), cb, (pkg, next) =>
@@ -139,19 +154,20 @@ module.exports = -> _.assign @,
         "#{o?.mode}"+
         " #{path}", o, expect: 0, next
 
+  # TODO: refactor this to use @inject_flow
   directory: (paths, [o]...) => (cb) =>
     o ||= {}; o.mode ||= '0755'
     recursive = o.recursive
     @each @getNames(paths), cb, (path, next) =>
       setModeAndOwner = =>
-        delete o.recursive
+        delete o.recursive # creating directories recursively != chown/chmod recursively
         @chown [path], o, =>
           @chmod [path], o, next
-      @test "test -d #{path}", code: 1, (necessary) =>
-        return @skip "directory already exists.", setModeAndOwner unless necessary
-        @execute "mkdir"+
+      @execute("test -d #{path}", test: ({code}) =>
+        return @log("Skipping existing directory.")(setModeAndOwner) if code is 0
+        @execute("mkdir"+
           "#{if recursive then ' -p' else ''}"+
-          " #{path}", o, setModeAndOwner
+          " #{path}", o)(setModeAndOwner))(=>)
 
   # download a file from the internet to the remote host with wget
   download: (uris, [o]...) => (cb) =>

@@ -1,20 +1,5 @@
   # validation
 
-  # used to asynchronously iterate an array or an object in series
-  each: (o, done_cb, each_cb, i=0) =>
-    if Array.isArray o
-      if o[i]?
-        each_cb o[i], => @each o, done_cb, each_cb, i+1
-      else
-        done_cb()
-    else if typeof o is 'object'
-      tuples = []
-      for own k of o
-        tuples.push [k, o[k]]
-      @each tuples, done_cb, each_cb
-    else # empty
-      done_cb() # carry on
-
   not_if: (cmd, do_cb) => (done_cb) =>
     @test cmd, code: 0, (res) =>
       unless res
