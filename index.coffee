@@ -197,8 +197,11 @@ module.exports = -> _.assign @,
     @test_v2 "stat #{o.to}", sudo: o?.sudo, (-> @code is 0 and o.force is false), =>
       @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
     , =>
-      fs.readFile "#{paths}", encoding: 'utf-8', (err) =>
-        @die err if err
+      if o?.decrypt
+        local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+        fs.writeFileSync local_tmp, @decrypt fs.readFileSync paths # decrypt file to new temporary location on local disk for easy upload
+      else local_tmp = paths
+
       @execute "rm -f #{o.to}", sudo: true, =>
         unless o?.final_to
           final_to = o.to
@@ -207,10 +210,11 @@ module.exports = -> _.assign @,
           final_to = o.final_to
           to = o.to
 
-        @log "SFTP uploading #{fs.statSync(paths).size} bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
-        @ssh.put paths, to, (err) =>
+        @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o?.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
+        @ssh.put local_tmp, to, (err) =>
           @die "error during SFTP file transfer: #{err}" if err
           @log "SFTP upload complete."
+          fs.unlinkSync local_tmp
           @chown to, o, =>
             @chmod to, o, =>
               @execute "mv #{to} #{final_to}", sudo: true, cb
@@ -219,11 +223,14 @@ module.exports = -> _.assign @,
     a = =>
       if o?.hasOwnProperty 'content'
         o.to = paths
+        o.content = @decrypt o.content if o?.decrypt
         b null, o.content
       else
         # read template from disk
         paths = path.join.apply null, @getNames paths
-        fs.readFile "#{paths}.coffee", encoding: 'utf-8', b
+        fs.readFile "#{paths}.coffee", encoding: (if o?.decrypt then 'binary' else 'utf-8'), (err, template) ->
+          template = @decrypt template if not err and o?.decrypt
+          b err, template
     b = (err, template) =>
       @die "to is required." unless o?.to
       @die err if err
