@@ -101,7 +101,7 @@ module.exports = -> _.assign @,
           @die "FATAL ERROR: unable to append line." unless code is 0
 
   # replaces line only when/where matching line is found
-  replace_line_in_file: (file, [o]...) => (cb) =>
+  replace_line_in_file: (file, [o]...) => @inject_flow =>
     @die "@file_replace_line() when_find and replace are required." unless o?.if_find and o?.replace
     @then @execute "grep #{bash_esc o.if_find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
@@ -131,7 +131,7 @@ module.exports = -> _.assign @,
         "#{if o?.purge then 'purge' else 'uninstall'}"+
         " -y #{@getNames(pkgs).join ' '}", sudo: true, expect: 0
 
-  service: (pkgs, [o]...) => (cb) =>
+  service: (pkgs, [o]...) => @inject_flow =>
     for pkg in @getNames(pkgs)
       @then @execute "service "+
         "#{pkg}"+
@@ -211,7 +211,7 @@ module.exports = -> _.assign @,
 
   remote_file_exists: (file, [o]...) => @inject_flow =>
     @die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
-    unless o.compare_checksum
+    unless o.compare_local_file or o.compare_checksum
       @then @execute "stat #{file}", sudo: o.sudo, test: ({code}) =>
         if code is 0
           @then @log "Remote file #{file} exists."
@@ -219,21 +219,25 @@ module.exports = -> _.assign @,
         else
           o.false?()
     else
-      local_checksum = ''
-      @then (cb) => fs.readFile o.compare_checksum, (err, data) =>
-        @die err if err
-        local_checksum = @checksum data, 'sha256'
-        cb()
+      if o.compare_local_file
+        local_checksum = ''
+        @then (cb) => fs.readFile o.compare_local_file, (err, data) =>
+          @die err if err
+          local_checksum = @checksum data, 'sha256'
+          cb()
+      else if o.compare_checksum
+        local_checksum = o.compare_checksum
+
       @then @execute "sha256sum #{file}", test: ({out}) =>
         if null isnt matches = out.match /[a-f0-9]{64}/
           if matches[0] is local_checksum
-            @then @log "Remote file checksum #{matches[0]} matches local checksum #{local_checksum}."
+            @then @log "Remote file checksum #{matches[0]} matches expected checksum #{local_checksum}."
             o.true?()
           else
-            @then @log "Remote file checksum #{matches[0]} does not match local checksum #{local_checksum}."
+            @then @log "Remote file checksum #{matches[0]} does not match expected checksum #{local_checksum}."
             o.false?()
         else
-          @then @log "Unexpected problem reading remote file checksum. Assuming remote file checksum does not match local checksum #{local_checksum}."
+          @then @log "Unexpected problem reading remote file checksum. Assuming remote file checksum does not match expected checksum #{local_checksum}."
           o.false?()
 
   # upload a file from localhost to the remote host with sftp
@@ -257,22 +261,24 @@ module.exports = -> _.assign @,
       final_to = o.final_to
       to = o.to
 
-    @then (cb) =>
-      @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
-
     @then @remote_file_exists to, true: =>
       @then @execute "rm -f #{to}", sudo: o.sudo
 
     @then @remote_file_exists final_to, true: =>
-      @then @remote_file_exists final_to, compare_checksum: local_tmp
+      @then @remote_file_exists final_to, compare_local_file: local_tmp
         , true: =>
           @then @log "Upload would be pointless since checksums match; skipping to save time."
           end()
         , false: =>
           @then @execute "rm -f #{final_to}", sudo: o.sudo
 
+    @then (cb) =>
+      @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
+
     @then @call @ssh.put, local_tmp, to, err: (err) =>
       @die "error during SFTP file transfer: #{err}" if err
+
+    @then @log "SFTP upload complete."
 
     if o.decrypt
       # delete temporarily decrypted version of the file from local disk
@@ -285,24 +291,34 @@ module.exports = -> _.assign @,
     # move into final location
     @then @execute "mv #{to} #{final_to}", sudo: o.sudo
 
-    @then @log "SFTP upload complete."
-
   # download a file from the internet to the remote host with wget
-  download: (uris, [o]...) => @inject_flow =>
+  download: (uris, [o]...) => @inject_flow (end) =>
     @die "to is required." unless o?.to
     for uri in @getNames uris
       do (uri) =>
-        @then @execute "wget -nv"+
-          " #{uri}"+
-          (if o.replace then '-nc ' else '')+
+        @then @remote_file_exists o.to, true: =>
+          unless o.checksum
+            @then @execute "rm -f #{o.to}", sudo: o.sudo
+          else
+            @then @remote_file_exists o.to, compare_checksum: o.checksum
+              , true: =>
+                @then @log "Download would be pointless since checksums match; skipping to save time."
+                end()
+              , false: =>
+                @then @execute "rm -f #{o.to}", sudo: o.sudo
+
+        # download
+        @then @execute "wget -nv #{uri}"+
           (bash_prefix '-P ', o.path)+
           (bash_prefix '-O ', o.to), o
+
+        # verify download
+        @then @remote_file_exists o.to, compare_checksum: o.checksum, false: =>
+          @die "Download failed; the checksum for the data we download doesn't match is was expected."
+
+        # set ownership and permissions
         @then @chown o.to, o
         @then @chmod o.to, o
-        return unless o?.checksum
-        @then @execute "sha256sum #{o.path or ''}#{o.to}", test: ({out}) =>
-          if null is matches = out.match /[a-f0-9]{64}/ or matches[0] isnt o.checksum
-            @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify matches[0]}."
 
   reboot: ([o]...) => (cb) =>
     o ||= {}; o.wait ||= 60*1000
