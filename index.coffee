@@ -193,9 +193,9 @@ module.exports = -> _.assign @,
 
     # render template from variables
     output = TemplateRenderer.render.apply variables, [template]
-    @then @strToFile output, o
+    @then @string_to_file output, o
 
-   strToFile: (str, [o]...) => @inject_flow =>
+   string_to_file: (str, [o]...) => @inject_flow =>
       ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
       @then @log "rendering file #{o.to} version #{ver}"
       @then -> console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
@@ -209,17 +209,49 @@ module.exports = -> _.assign @,
       # delete file
       @then @call fs.unlink, tmpFile, err: ->
 
-  # upload a file from localhost to the remote host with sftp
-  upload: (paths, [o]...) => @inject_flow =>
-    paths = path.join.apply null, paths if Array.isArray paths
-    @die "to is required." unless o?.to
+  remote_file_exists: (file, [o]...) => @inject_flow =>
+    console.log 'o: ', o
+    @die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
+    unless o.compare_checksum
+      @then @execute "stat #{file}", sudo: o.sudo, test: ({code}) =>
+        if code is 0
+          @then @log "Remote file #{file} exists."
+          o.true?()
+        else
+          o.false?()
+    else
+      local_checksum = ''
+      @then (cb) => fs.readFile o.compare_checksum, (err, data) =>
+        @die err if err
+        local_checksum = @checksum data, 'sha256'
+        cb()
+      @then @execute "sha256sum #{file}", test: ({out}) =>
+        if null isnt matches = out.match /[a-f0-9]{64}/
+          if matches[0] is local_checksum
+            @then @log "Remote file checksum #{matches[0]} matches local checksum #{local_checksum}."
+            o.true?()
+          else
+            @then @log "Remote file checksum #{matches[0]} does not match local checksum #{local_checksum}."
+            o.false?()
+        else
+          @then @log "Unexpected problem reading remote file checksum. Assuming remote file checksum does not match local checksum #{local_checksum}."
+          o.false?()
 
+  # upload a file from localhost to the remote host with sftp
+  upload: (paths, [o]...) => @inject_flow (end) =>
+    if Array.isArray paths
+      _path = path.join.apply null, paths
+    else
+      _path = paths
+    @die "to is required." unless o?.to
     o.force = true if typeof(o.force) == undefined
     if o.decrypt
       local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
-      console.log "decrypting file #{paths}..."
-      fs.writeFileSync local_tmp, @decrypt fs.readFileSync paths # decrypt file to new temporary location on local disk for easy upload
-    else local_tmp = paths
+      # decrypt file to temporary location on local disk for easy upload
+      @then @log "decrypting file #{_path}..."
+      @then (cb) => fs.writeFileSync local_tmp, @decrypt fs.readFileSync _path; cb()
+    else
+      local_tmp = _path
     unless o.final_to
       final_to = o.to
       to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
@@ -227,22 +259,39 @@ module.exports = -> _.assign @,
       final_to = o.final_to
       to = o.to
 
-    @then @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o?.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
+    @then @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }..."
 
-    #TODO: not if path with same sha256sum already exists
-    #TODO: this will be broken out soon and can be removed
-    @then @execute "stat #{o.to}", sudo: o.sudo, test: ({code}) =>
-      if code is 0 and o.force is false
-        @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
+    @then @remote_file_exists to, true: =>
+      unless o.force
+        @die "@upload() won't overwrite existing file #{to} without force: true."
+      else
+        @then @execute "rm -f #{to}", sudo: o.sudo
 
-    @then @execute "rm -f #{o.to}", sudo: o.sudo
+    @then @remote_file_exists final_to, true: =>
+      unless o.force
+        @die "@upload() won't overwrite existing file #{final_to} without force: true."
+      else
+        @then @remote_file_exists final_to, compare_checksum: _path
+          , true: =>
+            @then @log "Force overwrite would be pointless since checksums match; skipping to save time."
+            end()
+          , false: =>
+            @then @execute "rm -f #{final_to}", sudo: o.sudo
+
     @then @call @ssh.put, local_tmp, to, err: (err) =>
       @die "error during SFTP file transfer: #{err}" if err
+
     if o.decrypt
+      # delete temporarily decrypted version of the file from local disk
       @then @call fs.unlink, local_tmp, err: ->
+
+    # set ownership and permissions
     @then @chown to, o
     @then @chmod to, o
+
+    # move into final location
     @then @execute "mv #{to} #{final_to}", sudo: o.sudo
+
     @then @log "SFTP upload complete."
 
   # download a file from the internet to the remote host with wget
@@ -325,7 +374,7 @@ module.exports = -> _.assign @,
     @directory ["$(echo ~#{o.owner})/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
       @directory ["$(echo ~#{o.owner})/.ssh/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
         # write ssh key to ~/.ssh/
-        @strToFile o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
+        @string_to_file o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
           # create the release dir
           @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a $(echo ~#{o.owner})/.ssh/config", => # TODO: find a better alternative
             @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
