@@ -320,59 +320,38 @@ module.exports = -> _.assign @,
         @then @chown o.to, o
         @then @chmod o.to, o
 
-  reboot: ([o]...) => (cb) =>
-    o ||= {}; o.wait ||= 60*1000
-    @log '''
-    ###############################
-    #####  REBOOTING SERVER #######       (╯°o°)╯ ︵ ┻━┻
-    ###############################
-    '''
-    @execute "reboot", sudo: true, =>
-      @log "waiting #{o.wait}ms for server to reboot...", =>
-        delay o.wait, =>
-          @log "attempting to re-establish ssh connection", =>
-            @ssh.connect =>
-              cb()
+  link: (src, [o]...) => @inject_flow =>
+    @die "target is required." unless o?.target
+    @then @execute "test -L #{o.target}", test: ({code}) =>
+      unless code is 1
+        @then @execute "rm #{o.target}", o
+      @then @execute "ln -s #{src} #{o.target}", o, expect: 0
 
-  user: (name, [o]...) => (cb) =>
-    @test "id #{name}", code: 0, (exists) =>
-      return @skip "user #{name} exists.", cb if exists
-      cmd = "useradd #{name} \\\n"+
+  user: (name, [o]...) => @inject_flow (end) =>
+    @then @execute "id #{name}", test: ({code}) =>
+      return end "user #{name} exists." if code is 0
+      @then @execute "useradd #{name} \\\n"+
         "  --create-home \\\n"+
         "  --user-group \\\n"+
         (if o?.comment then "  --comment #{bash_esc o.comment} \\\n" else "")+
         (if o?.password then "  --password #{bash_esc o.password} \\\n" else "")+
-        "  --shell #{o.shell or "/bin/bash"} \\\n"+
-        "  ;"
-      @execute cmd, sudo: o?.sudo, =>
-        a = (next) =>
-          return next() unless o?.group_name
-          @execute "usermod -g #{o.group_name} #{name}", sudo: o?.sudo, next
-        b = (next) =>
-          return next() unless o?.groups?.length > 0
-          @each o.groups, next, (group, next) =>
-            @execute "usermod -a -G #{group} #{name}", sudo: o?.sudo, next
-        c = (next) =>
-          return next() unless o?.ssh_keys?.length > 0
-          @each o.ssh_keys, cb, (key, next) =>
-            @execute "mkdir -pm700 $(echo ~#{name})/.ssh/", sudo: o?.sudo, =>
-              @execute "touch $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo, =>
-                @execute "chmod 600 $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo, =>
-                  @execute "echo #{bash_esc key} | sudo tee -a $(echo ~#{name})/.ssh/authorized_keys >/dev/null", =>
-                    @execute "chown -R #{name}.#{name} $(echo ~#{name})/.ssh", sudo: o?.sudo, next
-        a( (-> b(-> c(-> cb() ) ) ) ) # execute in series; hide repetition; hide pyramid
+        "  --shell #{o.shell or "/bin/bash"} \\\n"
+        , sudo: o?.sudo
+      if o?.group_name
+        @then @execute "usermod -g #{o.group_name} #{name}", sudo: o?.sudo
+      if o?.groups?.length > 0
+        for group in o.groups
+          @then @execute "usermod -a -G #{group} #{name}", sudo: o?.sudo
+      if o?.ssh_keys?.length > 0
+        for key in o.ssh_keys
+          @then @execute "mkdir -pm700 $(echo ~#{name})/.ssh/", sudo: o?.sudo
+          @then @execute "touch $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo
+          @then @execute "chmod 600 $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo
+          @then @execute "echo #{bash_esc key} | sudo tee -a $(echo ~#{name})/.ssh/authorized_keys >/dev/null"
+          @then @execute "chown -R #{name}.#{name} $(echo ~#{name})/.ssh", sudo: o?.sudo
 
   group: (name, [o]...) => @inject_flow =>
     @then @execute "groupadd #{name}", _.merge ignore_errors: true, o
-
-  link: (src, [o]...) => (cb) =>
-    @die "target is required." unless o?.target
-    @test "test -L #{o.target}", code: 1, (necessary) =>
-      if necessary
-        @execute "ln -s #{src} #{o.target}", o, expect: 0, cb
-      else
-        @execute "rm #{o.target}", o, =>
-          @execute "ln -s #{src} #{o.target}", o, expect: 0, cb
 
   deploy: (name, [o]...) => (cb) =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
@@ -394,3 +373,16 @@ module.exports = -> _.assign @,
                 @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
                   @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
                     @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
+
+  reboot: ([o]...) => @inject_flow =>
+    o ||= {}; o.wait ||= 60*1000
+    @then @log '''
+    ###############################
+    #####  REBOOTING SERVER #######       (╯°o°)╯ ︵ ┻━┻
+    ###############################
+    '''
+    @then @execute "reboot", sudo: true
+    @then @log "waiting #{o.wait}ms for server to reboot..."
+    @then (cb) => delay o.wait, cb
+    @then @log "attempting to re-establish ssh connection"
+    @then (cb) => @ssh.connect cb
