@@ -210,7 +210,6 @@ module.exports = -> _.assign @,
       @then @call fs.unlink, tmpFile, err: ->
 
   remote_file_exists: (file, [o]...) => @inject_flow =>
-    console.log 'o: ', o
     @die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
     unless o.compare_checksum
       @then @execute "stat #{file}", sudo: o.sudo, test: ({code}) =>
@@ -244,11 +243,10 @@ module.exports = -> _.assign @,
     else
       _path = paths
     @die "to is required." unless o?.to
-    o.force = true if typeof(o.force) == undefined
     if o.decrypt
       local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
       # decrypt file to temporary location on local disk for easy upload
-      @then @log "decrypting file #{_path}..."
+      @then @log "Decrypting file #{_path}..."
       @then (cb) => fs.writeFileSync local_tmp, @decrypt fs.readFileSync _path; cb()
     else
       local_tmp = _path
@@ -259,24 +257,19 @@ module.exports = -> _.assign @,
       final_to = o.final_to
       to = o.to
 
-    @then @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }..."
+    @then (cb) =>
+      @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
 
     @then @remote_file_exists to, true: =>
-      unless o.force
-        @die "@upload() won't overwrite existing file #{to} without force: true."
-      else
-        @then @execute "rm -f #{to}", sudo: o.sudo
+      @then @execute "rm -f #{to}", sudo: o.sudo
 
     @then @remote_file_exists final_to, true: =>
-      unless o.force
-        @die "@upload() won't overwrite existing file #{final_to} without force: true."
-      else
-        @then @remote_file_exists final_to, compare_checksum: _path
-          , true: =>
-            @then @log "Force overwrite would be pointless since checksums match; skipping to save time."
-            end()
-          , false: =>
-            @then @execute "rm -f #{final_to}", sudo: o.sudo
+      @then @remote_file_exists final_to, compare_checksum: local_tmp
+        , true: =>
+          @then @log "Upload would be pointless since checksums match; skipping to save time."
+          end()
+        , false: =>
+          @then @execute "rm -f #{final_to}", sudo: o.sudo
 
     @then @call @ssh.put, local_tmp, to, err: (err) =>
       @die "error during SFTP file transfer: #{err}" if err
