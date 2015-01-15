@@ -6,6 +6,7 @@ crypto = require 'crypto'
 TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
 bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
+bash_prefix = (pre, val) -> if val then " #{pre}#{val}" else ''
 
 module.exports = -> _.assign @,
   # use with resources that accept multiple values in the name argument
@@ -242,22 +243,19 @@ module.exports = -> _.assign @,
     @then @log "SFTP upload complete."
 
   # download a file from the internet to the remote host with wget
-  download: (uris, [o]...) => (cb) =>
+  download: (uris, [o]...) => @inject_flow =>
     @die "to is required." unless o?.to
-    @each @getNames(uris), cb, (uri, nextFile) =>
-      ((download)=>
-        unless o?.replace # TODO: use checksum to assume replacement necessary
-          @test "test -f #{uri}", code: 1, (necessary) =>
-            download() if necessary
-      )(=>
-        @execute "wget -nv #{uri}#{if o?.to then " -O #{o.to}" else ""}", o, =>
-          @chown o.to, o, =>
-            @chmod o.to, o, =>
-              return nextFile() unless o?.checksum
-              @test "sha256sum #{o.to}", rx: /[a-f0-9]{64}/, (hash) =>
-                @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
-                nextFile()
-      )
+    for uri in @getNames uris
+      do (uri) =>
+        @then @execute "wget -nc -nv #{uri}"+
+          (bash_prefix '-P ', o.to)+
+          (bash_prefix '-O ', o.as), o
+        @then @chown o.to, o
+        @then @chmod o.to, o
+        return unless o?.checksum
+        @then @execute "sha256sum #{o.to}#{o.as}", test: ({out}) =>
+          if null is matches = out.match /[a-f0-9]{64}/ or matches[0] isnt o.checksum
+            @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify matches[0]}."
 
   reboot: ([o]...) => (cb) =>
     o ||= {}; o.wait ||= 60*1000
