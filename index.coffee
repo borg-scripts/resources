@@ -69,8 +69,11 @@ module.exports = -> _.assign @,
             else
               "Unexpected typeof expect passed to @execute(). Cannot continue."
 
-        if code isnt 0 and not error
-          @log("NOTICE: Non-zero exit code #{o.expect} was expected. Will continue.") =>
+        if code isnt 0
+          if not error
+            @log("NOTICE: Non-zero exit code #{o.expect} was expected. Will continue.") =>
+          else if o.ignore_errors
+            @log("NOTICE: Non-zero exit code #{o.expect} can be ignored. Will continue.") =>
 
         if error
           if o.retry
@@ -86,30 +89,26 @@ module.exports = -> _.assign @,
     try_again()
 
   # appends line only if no matching line is found
-  append_line_to_file: (file, [o]...) => (cb) =>
+  append_line_to_file: (file, [o]...) => @inject_flow =>
     @die "@file_append_line() unless_find and append are required." unless o?.unless_find and o?.append
-    @test "grep #{bash_esc o.unless_find} #{bash_esc file}", o, (-> @code is 0)
-    , =>
-      @log "Matching line found, not appending"
-      cb()
-    , =>
-      @log "Matching line not found, appending..."
-      @execute "echo #{bash_esc o.append} | sudo tee -a #{bash_esc file}", o, (code) =>
-        @die "FATAL ERROR: unable to append line." unless code is 0
-      cb()
+    @then @execute "grep #{bash_esc o.unless_find} #{bash_esc file}", _.merge o, test: ({code}) =>
+      if code is 0
+        @then @log "Matching line found, not appending"
+      else
+        @then @log "Matching line not found, appending..."
+        @then @execute "echo #{bash_esc o.append} | sudo tee -a #{bash_esc file}", _.merge o, test: ({code}) =>
+          @die "FATAL ERROR: unable to append line." unless code is 0
 
   # replaces line only when/where matching line is found
   replace_line_in_file: (file, [o]...) => (cb) =>
     @die "@file_replace_line() when_find and replace are required." unless o?.if_find and o?.replace
-    @test "grep #{bash_esc o.if_find} #{bash_esc file}", o, (-> @code is 0)
-    , =>
-      @log "Matching line found, replacing..."
-      @execute "sed -i #{bash_esc "s/#{o.if_find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", o, (code) =>
-        @die "FATAL ERROR: unable to replace line." unless code is 0
-        cb()
-    , =>
-      @log "Matching line not found, not replacing"
-      cb()
+    @then @execute "grep #{bash_esc o.if_find} #{bash_esc file}", _.merge o, test: ({code}) =>
+      if code is 0
+        @then @log "Matching line found, replacing..."
+        @then @execute "sed -i #{bash_esc "s/#{o.if_find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
+          @die "FATAL ERROR: unable to replace line." unless code is 0
+      else
+        @then @log "Matching line not found, not replacing"
 
   package_update: => @inject_flow =>
     # TODO: save .dotfile on remote host remembering last update date between sessions,
@@ -120,54 +119,127 @@ module.exports = -> _.assign @,
 
   install: (pkgs, [o]...) => @inject_flow =>
     @then @execute "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'is not installed and'", test: ({code}) =>
-      return @then @log "Skipping package(s) already installed." if code is 0
+      return @then @log "Skipping package(s) already installed." if code isnt 0
       @then @execute "DEBIAN_FRONTEND=noninteractive apt-get install -y "+
         "#{@getNames(pkgs).join ' '}", sudo: true, retry: 3, expect: 0
 
   uninstall: (pkgs, [o]...) => @inject_flow =>
     @then @execute "dpkg -s #{@getNames(pkgs).join ' '} 2>&1 | grep 'install ok installed'", test: ({code}) =>
-      return @then @log "Skipping package(s) already uninstalled." if code is 0
+      return @then @log "Skipping package(s) already uninstalled." if code isnt 0
       @then @execute "DEBIAN_FRONTEND=noninteractive apt-get "+
         "#{if o?.purge then 'purge' else 'uninstall'}"+
         " -y #{@getNames(pkgs).join ' '}", sudo: true, expect: 0
 
   service: (pkgs, [o]...) => (cb) =>
-    @each @getNames(pkgs), cb, (pkg, next) =>
-      @execute "service "+
+    for pkg in @getNames(pkgs)
+      @then @execute "service "+
         "#{pkg}"+
-        " #{o?.action or 'start'}", sudo: true, expect: 0, next
+        " #{o?.action or 'start'}", sudo: true, expect: 0
 
-  chown: (paths, [o]...) => (cb) =>
+  chown: (paths, [o]...) => @inject_flow =>
     @die "@chown() owner and/or group are required." unless o?.owner or o?.group
-    @each @getNames(paths), cb, (path, next) =>
-      @execute "chown "+
+    for _path in @getNames(paths)
+      @then @execute "chown "+
         "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.owner}"+
         ".#{o?.group}"+
-        " #{path}", o, expect: 0, next
+        " #{_path}", o, expect: 0
 
-  chmod: (paths, o) => (cb) =>
+  chmod: (paths, o) => @inject_flow =>
     @die "mode is required." unless o?.mode
-    @each @getNames(paths), cb, (path, next) =>
-      @execute "chmod "+
+    for _path in @getNames(paths)
+      @then @execute "chmod "+
         "#{if o?.recursive then '-R ' else ''}"+
         "#{o?.mode}"+
-        " #{path}", o, expect: 0, next
+        " #{_path}", o, expect: 0
 
-  # TODO: refactor this to use @inject_flow
-  directory: (paths, [o]...) => (cb) =>
+  directory: (paths, [o]...) => @inject_flow =>
     o ||= {}; o.mode ||= '0755'
     recursive = o.recursive
-    @each @getNames(paths), cb, (path, next) =>
-      setModeAndOwner = =>
-        delete o.recursive # creating directories recursively != chown/chmod recursively
-        @chown [path], o, =>
-          @chmod [path], o, next
-      @execute("test -d #{path}", test: ({code}) =>
-        return @log("Skipping existing directory.")(setModeAndOwner) if code is 0
-        @execute("mkdir"+
-          "#{if recursive then ' -p' else ''}"+
-          " #{path}", o)(setModeAndOwner))(=>)
+    for _path in @getNames(paths)
+      do (_path) =>
+        @then @execute "test -d #{_path}", test: ({code}) =>
+          if code is 0
+            @then @log 'Skipping existing directory.'
+          else
+            @then @execute "mkdir #{if recursive then ' -p' else ''} #{_path}", o
+          delete o.recursive # creating directories recursively != chown/chmod recursively
+          @then @chown [_path], o
+          @then @chmod [_path], o
+
+  template: (paths, [o]...) => @inject_flow =>
+    if o?.hasOwnProperty 'content'
+      # template from string
+      o.to = paths
+      template = o.content
+      template = @decrypt o.content if o?.decrypt
+    else
+      # template from disk
+      paths = path.join.apply null, @getNames paths
+      template = fs.readFileSync "#{paths}.coffee", encoding: if o?.decrypt then 'binary' else 'utf-8'
+      template = @decrypt template if o?.decrypt
+
+    @die "to is required." unless o?.to
+
+    # compile template variables
+    # from @server attributes
+    variables = server: @server, networks: @networks
+
+    # and provided variables key
+    if o?.variables
+      variables = _.merge o.variables, variables
+      o.variables = null # prevent template from accidentally modifying provided object
+
+    # render template from variables
+    output = TemplateRenderer.render.apply variables, [template]
+    @then @strToFile output, o
+
+   strToFile: (str, [o]...) => @inject_flow =>
+      ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
+      @then @log "rendering file #{o.to} version #{ver}"
+      @then -> console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
+      # write string to file on local disk
+      # NOTICE: for windows compatibility this could go into __dirname locally
+      tmpFile = path.join '/tmp/', 'local-'+ver
+      o.final_to = o.to; o.to = '/tmp/remote-'+ver
+      @then @call fs.writeFile, tmpFile, str
+      # upload file
+      @then @upload tmpFile, o
+      # delete file
+      @then @call fs.unlink, tmpFile, err: ->
+
+  # upload a file from localhost to the remote host with sftp
+  upload: (paths, [o]...) => @inject_flow =>
+    paths = path.join.apply null, paths if Array.isArray paths
+    @die "to is required." unless o?.to
+    o.force = true if typeof(o.force) == undefined
+    if o?.decrypt
+      local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+      fs.writeFileSync local_tmp, @decrypt fs.readFileSync paths # decrypt file to new temporary location on local disk for easy upload
+    else local_tmp = paths
+    unless o?.final_to
+      final_to = o.to
+      to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+    else
+      final_to = o.final_to
+      to = o.to
+
+    @then @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o?.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
+
+    #TODO: not if path with same sha256sum already exists
+    #TODO: this will be broken out soon and can be removed
+    @then @execute "stat #{o.to}", sudo: o.sudo, test: ({code}) =>
+      if code is 0 and o.force is false
+        @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
+
+    @then @execute "rm -f #{o.to}", sudo: o.sudo
+    @then @call @ssh.put, local_tmp, to, err: (err) =>
+      @die "error during SFTP file transfer: #{err}" if err
+    @then @call fs.unlink, local_tmp, err: ->
+    @then @chown to, o
+    @then @chmod to, o
+    @then @execute "mv #{to} #{final_to}", sudo: o.sudo
+    @then @log "SFTP upload complete."
 
   # download a file from the internet to the remote host with wget
   download: (uris, [o]...) => (cb) =>
@@ -186,83 +258,6 @@ module.exports = -> _.assign @,
                 @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify hash[0]}." unless hash[0] is o.checksum
                 nextFile()
       )
-
-  # upload a file from localhost to the remote host with sftp
-  upload: (paths, [o]...) => (cb) =>
-    paths = path.join.apply null, paths if Array.isArray paths
-    @die "to is required." unless o?.to
-    o.force = true if typeof(o.force) == undefined
-    #TODO: not if path with same sha256sum already exists
-    #TODO: this will be broken out soon and can be removed
-    @test_v2 "stat #{o.to}", sudo: o?.sudo, (-> @code is 0 and o.force is false), =>
-      @die "You're trying to overwrite a file that already exists: #{o.to}. Please specify force: true if you're sure you want to do this."
-    , =>
-      if o?.decrypt
-        local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
-        fs.writeFileSync local_tmp, @decrypt fs.readFileSync paths # decrypt file to new temporary location on local disk for easy upload
-      else local_tmp = paths
-
-      @execute "rm -f #{o.to}", sudo: true, =>
-        unless o?.final_to
-          final_to = o.to
-          to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
-        else
-          final_to = o.final_to
-          to = o.to
-
-        @log "SFTP uploading #{fs.statSync(local_tmp).size} #{if o?.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify paths} to #{JSON.stringify to}..."
-        @ssh.put local_tmp, to, (err) =>
-          @die "error during SFTP file transfer: #{err}" if err
-          @log "SFTP upload complete."
-          fs.unlinkSync local_tmp
-          @chown to, o, =>
-            @chmod to, o, =>
-              @execute "mv #{to} #{final_to}", sudo: true, cb
-
-  template: (paths, [o]...) => (cb) =>
-    a = =>
-      if o?.hasOwnProperty 'content'
-        o.to = paths
-        o.content = @decrypt o.content if o?.decrypt
-        b null, o.content
-      else
-        # read template from disk
-        paths = path.join.apply null, @getNames paths
-        fs.readFile "#{paths}.coffee", encoding: (if o?.decrypt then 'binary' else 'utf-8'), (err, template) ->
-          template = @decrypt template if not err and o?.decrypt
-          b err, template
-    b = (err, template) =>
-      @die "to is required." unless o?.to
-      @die err if err
-      # compile template variables
-      # from @server attributes
-      variables = server: @server, networks: @networks
-      # and provided variables key
-      if o?.variables
-        variables = _.merge o.variables, variables
-        o.variables = null # prevent template from accidentally modifying provided object
-
-      # render template from variables
-      output = TemplateRenderer.render.apply variables, [template]
-      @strToFile output, o, cb
-    a b
-
-   strToFile: (str, [o]...) => (cb) =>
-      ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
-      @log "rendered file #{o.to} version #{ver}"
-      console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
-      # write string to file on local disk
-      # NOTICE: for windows compatibility this could go into __dirname locally
-      tmpFile = path.join '/tmp/', 'local-'+ver
-      o.final_to = o.to; o.to = '/tmp/remote-'+ver
-      fs.writeFile tmpFile, str, (err) =>
-        @die err if err
-        # upload file
-        @upload tmpFile, o, =>
-          # delete file
-          fs.unlink tmpFile, (err) =>
-            #@die err if err # for some reason, it does fail to cleanup locally sometimes--but we don't care enough to die
-            cb()
 
   reboot: ([o]...) => (cb) =>
     o ||= {}; o.wait ||= 60*1000
@@ -306,12 +301,8 @@ module.exports = -> _.assign @,
                     @execute "chown -R #{name}.#{name} $(echo ~#{name})/.ssh", sudo: o?.sudo, next
         a( (-> b(-> c(-> cb() ) ) ) ) # execute in series; hide repetition; hide pyramid
 
-  group: (name, [o]...) => (cb) =>
-    @execute "groupadd #{name}", o, (code) =>
-      # NOTICE: can't pass cb directly as any code other than 0 would
-      #         be considered an error to the flow control next(err),
-      #         and here we don't care if there is an error.
-      cb()
+  group: (name, [o]...) => @inject_flow =>
+    @then @execute "groupadd #{name}", _.merge ignore_errors: true, o
 
   link: (src, [o]...) => (cb) =>
     @die "target is required." unless o?.target
@@ -342,15 +333,3 @@ module.exports = -> _.assign @,
                 @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
                   @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
                     @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
-
-                  #@ssh.cmd "svn info --username #{o.svn_username} --password #{o.svn_password} --revision #{o.revision} #{o.svn_arguments} #{o.repository}", (data: (data, type) ->
-                  #  out += data.toString() if type isnt 'stderr'
-                  #), (code, signal) =>
-                  #  @die 'svn info failed' unless code is 0
-                  #  @die 'svn revision not found' unless current_revision = ((m = out.match /^Revision: (\d+)$/m) && m[1])
-                  #  release_dir = path.join releases_dir, current_revision
-                  #  @ssh.cmd "sudo mkdir -p #{release_dir}", {}, =>
-                  #    @ssh.cmd "sudo chown -R #{o.owner}.#{o.group} #{release_dir}", {}, =>
-                  #      @ssh.cmd "sudo -u#{o.owner} svn checkout --username #{o.svn_username} --password #{o.svn_password} #{o.repository} --revision #{current_revision} #{o.svn_arguments} #{release_dir}", {}, ->
-                  #        current_dir = path.join o.deploy_to, 'current'
-                  #        link release_dir, current_dir, cb
