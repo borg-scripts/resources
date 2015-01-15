@@ -228,7 +228,7 @@ module.exports = -> _.assign @,
       else if o.compare_checksum
         local_checksum = o.compare_checksum
 
-      @then @execute "sha256sum #{file}", test: ({out}) =>
+      @then @execute "sha256sum #{file}", sudo: o.sudo, test: ({out}) =>
         if null isnt matches = out.match /[a-f0-9]{64}/
           if matches[0] is local_checksum
             @then @log "Remote file checksum #{matches[0]} matches expected checksum #{local_checksum}."
@@ -261,11 +261,11 @@ module.exports = -> _.assign @,
       final_to = o.final_to
       to = o.to
 
-    @then @remote_file_exists to, true: =>
+    @then @remote_file_exists to, sudo: o.sudo, true: =>
       @then @execute "rm -f #{to}", sudo: o.sudo
 
-    @then @remote_file_exists final_to, true: =>
-      @then @remote_file_exists final_to, compare_local_file: local_tmp
+    @then @remote_file_exists final_to, sudo: o.sudo, true: =>
+      @then @remote_file_exists final_to, compare_local_file: local_tmp, sudo: o.sudo
         , true: =>
           @then @log "Upload would be pointless since checksums match; skipping to save time."
           end()
@@ -296,11 +296,11 @@ module.exports = -> _.assign @,
     @die "to is required." unless o?.to
     for uri in @getNames uris
       do (uri) =>
-        @then @remote_file_exists o.to, true: =>
+        @then @remote_file_exists o.to, sudo: o.sudo, true: =>
           unless o.checksum
             @then @execute "rm -f #{o.to}", sudo: o.sudo
           else
-            @then @remote_file_exists o.to, compare_checksum: o.checksum
+            @then @remote_file_exists o.to, compare_checksum: o.checksum, sudo: o.sudo
               , true: =>
                 @then @log "Download would be pointless since checksums match; skipping to save time."
                 end()
@@ -313,7 +313,7 @@ module.exports = -> _.assign @,
           (bash_prefix '-O ', o.to), o
 
         # verify download
-        @then @remote_file_exists o.to, compare_checksum: o.checksum, false: =>
+        @then @remote_file_exists o.to, compare_checksum: o.checksum, sudo: o.sudo, false: =>
           @die "Download failed; the checksum for the data we download doesn't match is was expected."
 
         # set ownership and permissions
