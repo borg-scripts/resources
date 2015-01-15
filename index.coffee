@@ -213,12 +213,14 @@ module.exports = -> _.assign @,
   upload: (paths, [o]...) => @inject_flow =>
     paths = path.join.apply null, paths if Array.isArray paths
     @die "to is required." unless o?.to
+
     o.force = true if typeof(o.force) == undefined
-    if o?.decrypt
+    if o.decrypt
       local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+      console.log "decrypting file #{paths}..."
       fs.writeFileSync local_tmp, @decrypt fs.readFileSync paths # decrypt file to new temporary location on local disk for easy upload
     else local_tmp = paths
-    unless o?.final_to
+    unless o.final_to
       final_to = o.to
       to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
     else
@@ -236,7 +238,8 @@ module.exports = -> _.assign @,
     @then @execute "rm -f #{o.to}", sudo: o.sudo
     @then @call @ssh.put, local_tmp, to, err: (err) =>
       @die "error during SFTP file transfer: #{err}" if err
-    @then @call fs.unlink, local_tmp, err: ->
+    if o.decrypt
+      @then @call fs.unlink, local_tmp, err: ->
     @then @chown to, o
     @then @chmod to, o
     @then @execute "mv #{to} #{final_to}", sudo: o.sudo
@@ -247,13 +250,15 @@ module.exports = -> _.assign @,
     @die "to is required." unless o?.to
     for uri in @getNames uris
       do (uri) =>
-        @then @execute "wget -nc -nv #{uri}"+
-          (bash_prefix '-P ', o.to)+
-          (bash_prefix '-O ', o.as), o
+        @then @execute "wget -nv"+
+          " #{uri}"+
+          (if o.replace then '-nc ' else '')+
+          (bash_prefix '-P ', o.path)+
+          (bash_prefix '-O ', o.to), o
         @then @chown o.to, o
         @then @chmod o.to, o
         return unless o?.checksum
-        @then @execute "sha256sum #{o.to}#{o.as}", test: ({out}) =>
+        @then @execute "sha256sum #{o.path or ''}#{o.to}", test: ({out}) =>
           if null is matches = out.match /[a-f0-9]{64}/ or matches[0] isnt o.checksum
             @die "download failed; expected checksum #{JSON.stringify o.checksum} but found #{JSON.stringify matches[0]}."
 
