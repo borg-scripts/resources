@@ -91,7 +91,7 @@ module.exports = -> _.assign @,
 
   # appends line only if no matching line is found
   append_line_to_file: (file, [o]...) => @inject_flow =>
-    @die "@file_append_line() unless_find and append are required." unless o?.unless_find and o?.append
+    @die "@append_line_to_file() unless_find: and append: are required. you passed: ", arguments unless o?.unless_find and o?.append
     @then @execute "grep #{bash_esc o.unless_find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, not appending"
@@ -102,11 +102,11 @@ module.exports = -> _.assign @,
 
   # replaces line only when/where matching line is found
   replace_line_in_file: (file, [o]...) => @inject_flow =>
-    @die "@file_replace_line() when_find and replace are required." unless o?.if_find and o?.replace
-    @then @execute "grep #{bash_esc o.if_find} #{bash_esc file}", _.merge o, test: ({code}) =>
+    @die "@replace_line_in_file() find: and replace: are required. you passed: ", arguments unless o?.find and o?.replace
+    @then @execute "grep #{bash_esc o.find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, replacing..."
-        @then @execute "sed -i #{bash_esc "s/#{o.if_find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
+        @then @execute "sed -i #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
           @die "FATAL ERROR: unable to replace line." unless code is 0
       else
         @then @log "Matching line not found, not replacing"
@@ -165,8 +165,8 @@ module.exports = -> _.assign @,
           else
             @then @execute "mkdir #{if recursive then ' -p' else ''} #{_path}", o
           delete o.recursive # creating directories recursively != chown/chmod recursively
-          @then @chown [_path], o
-          @then @chmod [_path], o
+          @then @chown [_path], o if o.owner or o.group
+          @then @chmod [_path], o if o.mode
 
   template: (paths, [o]...) => @inject_flow =>
     if o?.hasOwnProperty 'content'
@@ -193,21 +193,25 @@ module.exports = -> _.assign @,
 
     # render template from variables
     output = TemplateRenderer.render.apply variables, [template]
-    @then @string_to_file output, o
 
-   string_to_file: (str, [o]...) => @inject_flow =>
-      ver = crypto.createHash('sha1').update(str).digest('hex')+Math.random().toString(36).substring(2,8)
-      @then @log "rendering file #{o.to} version #{ver}"
-      @then -> console.log "---- BEGIN FILE ----\n#{str}\n--- END FILE ---"
-      # write string to file on local disk
-      # NOTICE: for windows compatibility this could go into __dirname locally
-      tmpFile = path.join '/tmp/', 'local-'+ver
-      o.final_to = o.to; o.to = '/tmp/remote-'+ver
-      @then @call fs.writeFile, tmpFile, str
-      # upload file
-      @then @upload tmpFile, o
-      # delete file
-      @then @call fs.unlink, tmpFile, err: ->
+    # write template temporarily to local disk
+    ver = crypto
+      .createHash('sha1')
+      .update(output)
+      .digest('hex')+Math.random().toString(36).substring(2,8)
+    @then @log "rendering file #{o.to} version #{ver}"
+    @then -> console.log "---- BEGIN FILE ----\n#{output}\n--- END FILE ---"
+    # write string to file on local disk
+    # NOTICE: for windows compatibility this could go into __dirname locally
+    tmpFile = path.join '/tmp/', 'local-'+ver
+    o.final_to = o.to; o.to = '/tmp/remote-'+ver
+    @then @call fs.writeFile, tmpFile, output
+
+    # upload file to remote disk
+    @then @upload tmpFile, o
+
+    # delete temporary file from local disk
+    @then @call fs.unlink, tmpFile, err: ->
 
   remote_file_exists: (file, [o]...) => @inject_flow =>
     @die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
@@ -265,6 +269,8 @@ module.exports = -> _.assign @,
       @then @remote_file_exists final_to, compare_local_file: local_tmp, sudo: o.sudo
         , true: =>
           @then @log "Upload would be pointless since checksums match; skipping to save time."
+          @then @chown [final_to], o
+          @then @chmod [final_to], o
           end()
 
     @then (cb) =>
@@ -335,35 +341,50 @@ module.exports = -> _.assign @,
           @then @execute "usermod -a -G #{group} #{name}", sudo: o?.sudo
       if o?.ssh_keys?.length > 0
         for key in o.ssh_keys
-          @then @execute "mkdir -pm700 $(echo ~#{name})/.ssh/", sudo: o?.sudo
+          @then @directory ["$(echo ~#{name})/.ssh/"],
+            recursive: true
+            mode: '0700'
+            sudo: o?.sudo
           @then @execute "touch $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo
-          @then @execute "chmod 600 $(echo ~#{name})/.ssh/authorized_keys", sudo: o?.sudo
+          @then @chmod ["$(echo ~#{name})/.ssh/authorized_keys"],
+            mode: '0600'
+            sudo: o?.sudo
           @then @execute "echo #{bash_esc key} | sudo tee -a $(echo ~#{name})/.ssh/authorized_keys >/dev/null"
-          @then @execute "chown -R #{name}.#{name} $(echo ~#{name})/.ssh", sudo: o?.sudo
+          @then @chown ["$(echo ~#{name})/.ssh"],
+            recursive: true
+            owner: name
+            group: name
+            sudo: o?.sudo
 
   group: (name, [o]...) => @inject_flow =>
     @then @execute "groupadd #{name}", _.merge ignore_errors: true, o
 
-  deploy: (name, [o]...) => (cb) =>
+  deploy: (name, [o]...) => @inject_flow =>
     # TODO: support shared dir, cached-copy, and symlinking logs and other stuff
     # TODO: support keep_releases
     o.sudo = o.owner
     o.keep_releases ||= 3
     privateKeyPath = "$(echo ~#{o.owner})/.ssh/id_rsa" # TODO: make this a safer name; to avoid overwriting existing file
-    @directory ["$(echo ~#{o.owner})/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
-      @directory ["$(echo ~#{o.owner})/.ssh/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700', =>
-        # write ssh key to ~/.ssh/
-        @string_to_file o.git.deployKey, owner: o.owner, group: o.group, sudo: true, to: privateKeyPath, mode: '0600', =>
-          # create the release dir
-          @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a $(echo ~#{o.owner})/.ssh/config", => # TODO: find a better alternative
-            @test "git ls-remote #{o.git.repo} #{o.git.branch}", o, rx: `/[a-f0-9]{40}/`, (matches) =>
-              @die "github repo didn't have the branch we're expecting #{o.git.branch}" unless Array.isArray matches
-              remoteRef = matches[0]
-              @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
-                release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
-                @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true, =>
-                  @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, =>
-                    @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo, cb
+    @then @directory ["$(echo ~#{o.owner})/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700'
+    @then @directory ["$(echo ~#{o.owner})/.ssh/"], owner: o.owner, group: o.group, sudo: true, recursive: true, mode: '0700'
+    # write ssh key to ~/.ssh/
+    @then @template privateKeyPath,
+      content: o.git.deployKey
+      owner: o.owner
+      group: o.group
+      mode: '0600'
+      sudo: true
+    # create the release dir
+    @then @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a $(echo ~#{o.owner})/.ssh/config" # TODO: find a better alternative
+    @then @execute "git ls-remote #{o.git.repo} #{o.git.branch}", sudo: o.sudo, test: ({out}) =>
+      if null is matches = out.match `/[a-f0-9]{40}/`
+        @die "github repo didn't have the branch we're expecting #{o.git.branch}"
+      remoteRef = matches[0]
+      @then @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true
+      release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
+      @then @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true
+      @then @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo
+      @then @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo
 
   reboot: ([o]...) => @inject_flow =>
     o ||= {}; o.wait ||= 60*1000
