@@ -261,16 +261,11 @@ module.exports = -> _.assign @,
       final_to = o.final_to
       to = o.to
 
-    @then @remote_file_exists to, sudo: o.sudo, true: =>
-      @then @execute "rm -f #{to}", sudo: o.sudo
-
     @then @remote_file_exists final_to, sudo: o.sudo, true: =>
       @then @remote_file_exists final_to, compare_local_file: local_tmp, sudo: o.sudo
         , true: =>
           @then @log "Upload would be pointless since checksums match; skipping to save time."
           end()
-        , false: =>
-          @then @execute "rm -f #{final_to}", sudo: o.sudo
 
     @then (cb) =>
       @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
@@ -297,15 +292,11 @@ module.exports = -> _.assign @,
     for uri in @getNames uris
       do (uri) =>
         @then @remote_file_exists o.to, sudo: o.sudo, true: =>
-          unless o.checksum
-            @then @execute "rm -f #{o.to}", sudo: o.sudo
-          else
+          if o.checksum
             @then @remote_file_exists o.to, compare_checksum: o.checksum, sudo: o.sudo
               , true: =>
                 @then @log "Download would be pointless since checksums match; skipping to save time."
                 end()
-              , false: =>
-                @then @execute "rm -f #{o.to}", sudo: o.sudo
 
         # download
         @then @execute "wget -nv #{uri}"+
