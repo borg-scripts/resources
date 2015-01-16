@@ -72,9 +72,9 @@ module.exports = -> _.assign @,
 
         if code isnt 0
           if not error
-            @log("NOTICE: Non-zero exit code #{o.expect} was expected. Will continue.") =>
+            @log("NOTICE: Non-zero exit code was expected. Will continue.") =>
           else if o.ignore_errors
-            @log("NOTICE: Non-zero exit code #{o.expect} can be ignored. Will continue.") =>
+            @log("NOTICE: Non-zero exit code can be ignored. Will continue.") =>
 
         if error
           if o.retry
