@@ -1,7 +1,6 @@
 _ = require 'lodash'
 fs = require 'fs'
 path = require 'path'
-async = require 'async2'
 crypto = require 'crypto'
 TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
