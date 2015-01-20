@@ -9,10 +9,12 @@ bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 bash_prefix = (pre, val) -> if val then " #{pre}#{val}" else ''
 
 module.exports = -> _.assign @,
+  die = (reason) -> @die(reason)() # immediate death; doesn't want for 2nd-pass
+
   # use with resources that accept multiple values in the name argument
   getNames: (names) =>
     names = if Array.isArray names then names else names.compact().split ' '
-    @die "One or more names are required." if names.length is 0
+    die "One or more names are required." if names.length is 0
     return names
 
   # used to asynchronously iterate an array or an object in series
@@ -82,32 +84,32 @@ module.exports = -> _.assign @,
               @log(type: 'err', "#{error} Will try again...") =>
                 try_again()
             else
-              @die "#{error} Tried #{o.retry} times. Giving up."
+              @then @die "#{error} Tried #{o.retry} times. Giving up."
           else
-            @die error
+            @then @die error
         else
           cb (if o.ignore_errors then null else error), code: code, out: out
     try_again()
 
   # appends line only if no matching line is found
   append_line_to_file: (file, [o]...) => @inject_flow =>
-    @die "@append_line_to_file() unless_find: and append: are required. you passed: ", arguments unless o?.unless_find and o?.append
+    die "@append_line_to_file() unless_find: and append: are required. you passed: "+JSON.stringify(arguments) unless o?.unless_find and o?.append
     @then @execute "grep #{bash_esc o.unless_find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, not appending"
       else
         @then @log "Matching line not found, appending..."
         @then @execute "echo #{bash_esc o.append} | sudo tee -a #{bash_esc file}", _.merge o, test: ({code}) =>
-          @die "FATAL ERROR: unable to append line." unless code is 0
+          @then @die "FATAL ERROR: unable to append line." unless code is 0
 
   # replaces line only when/where matching line is found
   replace_line_in_file: (file, [o]...) => @inject_flow =>
-    @die "@replace_line_in_file() find: and replace: are required. you passed: ", arguments unless o?.find and o?.replace
+    die "@replace_line_in_file() find: and replace: are required. you passed: "+JSON.stringify arguments unless o?.find and o?.replace
     @then @execute "grep #{bash_esc o.find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, replacing..."
         @then @execute "sed -i #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
-          @die "FATAL ERROR: unable to replace line." unless code is 0
+          @then @die "FATAL ERROR: unable to replace line." unless code is 0
       else
         @then @log "Matching line not found, not replacing"
 
@@ -138,7 +140,7 @@ module.exports = -> _.assign @,
         " #{o?.action or 'start'}", sudo: true, expect: 0
 
   chown: (paths, [o]...) => @inject_flow =>
-    @die "@chown() owner and/or group are required." unless o?.owner or o?.group
+    die "@chown() owner and/or group are required." unless o?.owner or o?.group
     for _path in @getNames(paths)
       @then @execute "chown "+
         "#{if o?.recursive then '-R ' else ''}"+
@@ -147,7 +149,7 @@ module.exports = -> _.assign @,
         " #{_path}", o, expect: 0
 
   chmod: (paths, o) => @inject_flow =>
-    @die "mode is required." unless o?.mode
+    die "mode is required." unless o?.mode
     for _path in @getNames(paths)
       @then @execute "chmod "+
         "#{if o?.recursive then '-R ' else ''}"+
@@ -180,7 +182,7 @@ module.exports = -> _.assign @,
       template = fs.readFileSync "#{paths}.coffee", encoding: if o?.decrypt then 'binary' else 'utf-8'
       template = @decrypt template if o?.decrypt
 
-    @die "to is required." unless o?.to
+    die "to is required." unless o?.to
 
     # compile template variables
     # from @server attributes
@@ -214,7 +216,7 @@ module.exports = -> _.assign @,
     @then @call fs.unlink, tmpFile, err: ->
 
   remote_file_exists: (file, [o]...) => @inject_flow =>
-    @die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
+    die "@remote_file_exists true: or false: callback function is required." unless o?.true or o?.false
     unless o.compare_local_file or o.compare_checksum
       @then @execute "stat #{file}", sudo: o.sudo, test: ({code}) =>
         if code is 0
@@ -226,7 +228,7 @@ module.exports = -> _.assign @,
       if o.compare_local_file
         local_checksum = ''
         @then (cb) => fs.readFile o.compare_local_file, (err, data) =>
-          @die err if err
+          @then @die err if err
           local_checksum = @checksum data, 'sha256'
           cb()
       else if o.compare_checksum
@@ -250,7 +252,7 @@ module.exports = -> _.assign @,
       _path = path.join.apply null, paths
     else
       _path = paths
-    @die "to is required." unless o?.to
+    die "to is required." unless o?.to
     if o.decrypt
       local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
       # decrypt file to temporary location on local disk for easy upload
@@ -277,7 +279,7 @@ module.exports = -> _.assign @,
       @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
 
     @then @call @ssh.put, local_tmp, to, err: (err) =>
-      @die "error during SFTP file transfer: #{err}" if err
+      die "error during SFTP file transfer: #{err}" if err
 
     @then @log "SFTP upload complete."
 
@@ -294,7 +296,7 @@ module.exports = -> _.assign @,
 
   # download a file from the internet to the remote host with wget
   download: (uris, [o]...) => @inject_flow (end) =>
-    @die "to is required." unless o?.to
+    die "to is required." unless o?.to
     for uri in @getNames uris
       do (uri) =>
         @then @remote_file_exists o.to, sudo: o.sudo, true: =>
@@ -311,14 +313,14 @@ module.exports = -> _.assign @,
 
         # verify download
         @then @remote_file_exists o.to, compare_checksum: o.checksum, sudo: o.sudo, false: =>
-          @die "Download failed; the checksum for the data we download doesn't match is was expected."
+          @then @die "Download failed; the checksum for the data we download doesn't match is was expected."
 
         # set ownership and permissions
         @then @chown o.to, o
         @then @chmod o.to, o
 
   link: (src, [o]...) => @inject_flow =>
-    @die "target is required." unless o?.target
+    die "target is required." unless o?.target
     @then @execute "test -L #{o.target}", test: ({code}) =>
       unless code is 1
         @then @execute "rm #{o.target}", o
@@ -378,7 +380,7 @@ module.exports = -> _.assign @,
     @then @execute 'echo -e "Host github.com\\n\\tStrictHostKeyChecking no\\n" | '+"sudo -u #{o.sudo} tee -a $(echo ~#{o.owner})/.ssh/config" # TODO: find a better alternative
     @then @execute "git ls-remote #{o.git.repo} #{o.git.branch}", sudo: o.sudo, test: ({out}) =>
       if null is matches = out.match `/[a-f0-9]{40}/`
-        @die "github repo didn't have the branch we're expecting #{o.git.branch}"
+        @then @die "github repo didn't have the branch we're expecting #{o.git.branch}"
       remoteRef = matches[0]
       @then @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true
       release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
