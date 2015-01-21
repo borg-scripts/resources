@@ -1,4 +1,3 @@
-_ = require 'lodash'
 fs = require 'fs'
 path = require 'path'
 crypto = require 'crypto'
