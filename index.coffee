@@ -1,4 +1,3 @@
-_ = require 'lodash'
 fs = require 'fs'
 path = require 'path'
 crypto = require 'crypto'
@@ -384,7 +383,7 @@ module.exports = -> _.assign @,
       @then @directory o.deploy_to, owner: o.owner, group: o.group, sudo: true, recursive: true
       release_dir = "#{o.deploy_to}/releases/#{remoteRef}"
       @then @directory release_dir, owner: o.owner, group: o.group, sudo: true, recursive: true
-      @then @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo
+      @then @execute "git clone -b #{o.git.branch} #{o.git.repo} #{release_dir}", sudo: o.sudo, ignore_errors: true
       @then @link release_dir, target: "#{o.deploy_to}/current", sudo: o.sudo
 
   reboot: ([o]...) => @inject_flow =>
