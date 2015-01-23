@@ -1,0 +1,14 @@
+{
+  "name": "resources",
+  "version": "0.0.1",
+  "description": "This [Borg](https://github.com/mikesmullin/borg) [resource](http://mikesmullin.github.io/borg-docs/index.html#resources) repository is organized to hold the most [Common Resources](http://mikesmullin.github.io/borg-docs/index.html#common-resources) used by all [Scripts](http://mikesmullin.github.io/borg-docs/index.html#scripts).",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "GPLv2",
+  "dependencies": {
+    "coffee-script": "^1.8.0"
+  }
+}
