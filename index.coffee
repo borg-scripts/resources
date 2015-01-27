@@ -285,12 +285,12 @@ module.exports = -> _.assign @,
       # delete temporarily decrypted version of the file from local disk
       @then @call fs.unlink, local_tmp, err: ->
 
-    # set ownership and permissions
-    @then @chown to, o
-    @then @chmod to, o
-
     # move into final location
-    @then @execute "mv #{to} #{final_to}", sudo: o.sudo
+    @then @execute "mv #{to} #{final_to}", sudo: o.sudo, expect: 0
+
+    # set ownership and permissions
+    @then @chown final_to, o
+    @then @chmod final_to, o
 
   # download a file from the internet to the remote host with wget
   download: (uris, [o]...) => @inject_flow (end) =>
