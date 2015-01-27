@@ -7,7 +7,7 @@ bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 bash_prefix = (pre, val) -> if val then " #{pre}#{val}" else ''
 
 module.exports = -> _.assign @,
-  die = (reason) -> @die(reason)() # immediate death; doesn't want for 2nd-pass
+  die = (reason) => @die(reason)() # immediate death; doesn't want for 2nd-pass
 
   # use with resources that accept multiple values in the name argument
   getNames: (names) =>
