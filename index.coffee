@@ -274,7 +274,7 @@ module.exports = -> _.assign @,
           end()
 
     @then (cb) =>
-      @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" }...")(cb)
+      @log("SFTP uploading #{fs.statSync(local_tmp).size} #{if o.decrypt then 'decrypted ' else ''}bytes from #{JSON.stringify _path} to #{JSON.stringify final_to}#{if final_to isnt o.to then " through temporary file #{JSON.stringify to}" else ""}...")(cb)
 
     @then @call @ssh.put, local_tmp, to, err: (err) =>
       die "error during SFTP file transfer: #{err}" if err
