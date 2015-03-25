@@ -1,3 +1,4 @@
+os = require 'os'
 fs = require 'fs'
 path = require 'path'
 crypto = require 'crypto'
@@ -203,7 +204,7 @@ module.exports = -> _.assign @,
     @then -> console.log "---- BEGIN FILE ----\n#{output}\n--- END FILE ---"
     # write string to file on local disk
     # NOTICE: for windows compatibility this could go into __dirname locally
-    tmpFile = path.join '/tmp/', 'local-'+ver
+    tmpFile = path.join os.tmpdir()+'/', 'local-'+ver
     o.final_to = o.to; o.to = '/tmp/remote-'+ver
     @then @call fs.writeFile, tmpFile, output
 
@@ -252,7 +253,7 @@ module.exports = -> _.assign @,
       _path = paths
     die "to is required." unless o?.to
     if o.decrypt
-      local_tmp = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+      local_tmp = os.tmpdir()+"/#{Math.random().toString(36).substring(2,8)}"
       # decrypt file to temporary location on local disk for easy upload
       @then @log "Decrypting file #{_path}..."
       @then (cb) => fs.writeFileSync local_tmp, @decrypt fs.readFileSync _path; cb()
