@@ -6,6 +6,12 @@ TemplateRenderer = require './template_renderer'
 delay = (s, f) -> setTimeout f, s
 bash_esc = (s) -> (''+s).replace `/([^0-9a-z-])/gi`, '\\$1'
 bash_prefix = (pre, val) -> if val then " #{pre}#{val}" else ''
+tmp_file = (seed) ->
+  ver = crypto
+    .createHash('sha1')
+    .update(seed)
+    .digest('hex')+Math.random().toString(36).substring(2,8)
+
 
 module.exports = -> _.assign @,
   die = (reason) => @die(reason)() # immediate death; doesn't want for 2nd-pass
@@ -107,8 +113,10 @@ module.exports = -> _.assign @,
     @then @execute "grep #{bash_esc o.find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, replacing..."
-        @then @execute "sed -i #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
-          @then @die "FATAL ERROR: unable to replace line." unless code is 0
+        ver = tmp_file file
+        @then @execute "sed #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file} > #{bash_esc "/tmp/remote-#{ver}"}", _.merge o, test: ({code}) =>
+          @then @execute "mv #{bash_esc "/tmp/remote-#{ver}"} #{bash_esc file}", _.merge o, test: ({code}) =>
+            @then @die "FATAL ERROR: unable to replace line." unless code is 0
       else
         @then @log "Matching line not found, not replacing"
 
@@ -196,14 +204,11 @@ module.exports = -> _.assign @,
     output = TemplateRenderer.render.apply variables, [template]
 
     # write template temporarily to local disk
-    ver = crypto
-      .createHash('sha1')
-      .update(output)
-      .digest('hex')+Math.random().toString(36).substring(2,8)
     @then @log "rendering file #{o.to} version #{ver}"
     @then -> console.log "---- BEGIN FILE ----\n#{output}\n--- END FILE ---"
     # write string to file on local disk
     # NOTICE: for windows compatibility this could go into __dirname locally
+    ver = tmp_file output
     tmpFile = path.join os.tmpdir()+'/', 'local-'+ver
     o.final_to = o.to; o.to = '/tmp/remote-'+ver
     @then @call fs.writeFile, tmpFile, output
@@ -252,8 +257,9 @@ module.exports = -> _.assign @,
     else
       _path = paths
     die "to is required." unless o?.to
+    ver = tmp_file _path
     if o.decrypt
-      local_tmp = os.tmpdir()+"/#{Math.random().toString(36).substring(2,8)}"
+      local_tmp = os.tmpdir()+"/local-#{ver}"
       # decrypt file to temporary location on local disk for easy upload
       @then @log "Decrypting file #{_path}..."
       @then (cb) => fs.writeFileSync local_tmp, @decrypt fs.readFileSync _path; cb()
@@ -261,7 +267,7 @@ module.exports = -> _.assign @,
       local_tmp = _path
     unless o.final_to
       final_to = o.to
-      to = "/tmp/#{Math.random().toString(36).substring(2,8)}"
+      to = "/tmp/remote-#{ver}"
     else
       final_to = o.final_to
       to = o.to
