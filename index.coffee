@@ -113,8 +113,10 @@ module.exports = -> _.assign @,
     @then @execute "grep #{bash_esc o.find} #{bash_esc file}", _.merge o, test: ({code}) =>
       if code is 0
         @then @log "Matching line found, replacing..."
-        @then @execute "sed -i #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file}", _.merge o, test: ({code}) =>
-          @then @die "FATAL ERROR: unable to replace line." unless code is 0
+        ver = tmp_file file
+        @then @execute "sed #{bash_esc "s/#{o.find}.*/#{bash_esc o.replace}/"} #{bash_esc file} > #{bash_esc "/tmp/remote-#{ver}"}", _.merge o, test: ({code}) =>
+          @then @execute "mv #{bash_esc "/tmp/remote-#{ver}"} #{bash_esc file}", _.merge o, test: ({code}) =>
+            @then @die "FATAL ERROR: unable to replace line." unless code is 0
       else
         @then @log "Matching line not found, not replacing"
 
